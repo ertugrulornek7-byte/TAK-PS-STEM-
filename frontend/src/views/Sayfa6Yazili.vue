@@ -1,0 +1,410 @@
+<script setup>
+import { ref, onMounted, computed, watch } from 'vue'
+import { useEtutStore } from '../stores/etutStore'
+import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
+import axios from 'axios'
+
+const etutStore = useEtutStore()
+const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
+const islemDurumu = ref('')
+
+const donemler = [
+  { id: '1D1Y', ad: '1. Dönem 1. Yazılı' },
+  { id: '1D2Y', ad: '1. Dönem 2. Yazılı' },
+  { id: '2D1Y', ad: '2. Dönem 1. Yazılı' },
+  { id: '2D2Y', ad: '2. Dönem 2. Yazılı' }
+]
+const seciliDonem = ref('1D1Y')
+
+const branslar = ['MATEMATİK', 'FEN', 'SOSYAL', 'İNGİLİZCE', 'TÜRKÇE']
+const seciliBrans = ref('MATEMATİK')
+
+const tumNotlar = ref({}) 
+const sutunSayisi = ref(1) 
+
+// Geçmiş dönem notlarını tutacak hafıza
+const oncekiNotlar = ref({})
+
+onMounted(async () => {
+  if (etutStore.gosterilenTalebeler.length === 0) {
+    await etutStore.talebeleriGetir()
+  }
+  await verileriCek()
+})
+
+watch([seciliDonem, seciliBrans], async ([yeniDonem, yeniBrans], [eskiDonem, eskiBrans]) => {
+  if (yeniDonem !== eskiDonem) {
+    await verileriCek()
+  } else {
+    bransAyarlariniUygula()
+  }
+})
+
+let hamAyarlar = []
+const verileriCek = async () => {
+  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  if (!kurumId) return
+
+  try {
+    // 1. O anki dönemin verilerini çek
+    const res = await axios.get(`http://localhost:3000/api/pre-exams/${kurumId}/${seciliDonem.value}`)
+    
+    tumNotlar.value = {}
+    etutStore.gosterilenTalebeler.forEach(t => {
+      branslar.forEach(b => {
+        tumNotlar.value[`${t.id}-${b}`] = { target: null, practices: [] }
+      })
+    })
+
+    res.data.results.forEach(kayit => {
+      tumNotlar.value[`${kayit.studentId}-${kayit.subject}`] = {
+        target: kayit.targetScore,
+        practices: JSON.parse(kayit.practiceScores || '[]')
+      }
+    })
+
+    hamAyarlar = res.data.settings
+    bransAyarlariniUygula()
+
+    // 2. Dipnotlar için geçmiş dönem (Gerçek Okul Yazılısı) verilerini çek
+    oncekiNotlar.value = {}
+    if (seciliDonem.value === '1D2Y') {
+      const resOnceki = await axios.get(`http://localhost:3000/api/pre-exams/${kurumId}/1D1Y`)
+      resOnceki.data.results.forEach(k => { 
+        if(k.subject === seciliBrans.value) oncekiNotlar.value[k.studentId] = k.actualScore 
+      })
+    } 
+    else if (seciliDonem.value === '2D1Y') {
+      // 1. Dönemin 1. ve 2. yazılısını çekip ortalamasını al
+      const res1 = await axios.get(`http://localhost:3000/api/pre-exams/${kurumId}/1D1Y`)
+      const res2 = await axios.get(`http://localhost:3000/api/pre-exams/${kurumId}/1D2Y`)
+      
+      etutStore.gosterilenTalebeler.forEach(t => {
+        const n1 = res1.data.results.find(x => x.studentId === t.id && x.subject === seciliBrans.value)?.actualScore
+        const n2 = res2.data.results.find(x => x.studentId === t.id && x.subject === seciliBrans.value)?.actualScore
+        let top = 0, say = 0
+        if(n1 !== undefined && n1 !== null) { top += n1; say++ }
+        if(n2 !== undefined && n2 !== null) { top += n2; say++ }
+        oncekiNotlar.value[t.id] = say > 0 ? Math.round(top/say) : null
+      })
+    } 
+    else if (seciliDonem.value === '2D2Y') {
+      const resOnceki = await axios.get(`http://localhost:3000/api/pre-exams/${kurumId}/2D1Y`)
+      resOnceki.data.results.forEach(k => { 
+        if(k.subject === seciliBrans.value) oncekiNotlar.value[k.studentId] = k.actualScore 
+      })
+    }
+
+  } catch (error) {
+    console.error('Veriler çekilemedi', error)
+  }
+}
+
+const bransAyarlariniUygula = () => {
+  const ayar = hamAyarlar.find(a => a.subject === seciliBrans.value)
+  sutunSayisi.value = ayar ? ayar.practiceCount : 1
+}
+
+const sutunEkle = async () => {
+  sutunSayisi.value++
+  await sutunAyariniKaydet()
+}
+
+const sutunCikar = async () => {
+  if (sutunSayisi.value > 1) {
+    sutunSayisi.value--
+    etutStore.gosterilenTalebeler.forEach(t => {
+      const ogr = tumNotlar.value[`${t.id}-${seciliBrans.value}`]
+      if (ogr.practices.length > sutunSayisi.value) {
+        ogr.practices = ogr.practices.slice(0, sutunSayisi.value)
+        notKaydet(t.id) 
+      }
+    })
+    await sutunAyariniKaydet()
+  }
+}
+
+const sutunAyariniKaydet = async () => {
+  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  if (!kurumId) {
+    alert("Kurum kimliği bulunamadı, sayfayı yenileyin.")
+    return
+  }
+
+  try {
+    await axios.post('http://localhost:3000/api/pre-exams/settings', {
+      institutionId: kurumId, // GÜVENLİ MÜHÜR
+      term: seciliDonem.value,
+      subject: seciliBrans.value,
+      practiceCount: sutunSayisi.value
+    })
+    
+    const ayarIdx = hamAyarlar.findIndex(a => a.subject === seciliBrans.value)
+    if (ayarIdx !== -1) {
+      hamAyarlar[ayarIdx].practiceCount = sutunSayisi.value
+    } else {
+      hamAyarlar.push({ subject: seciliBrans.value, practiceCount: sutunSayisi.value })
+    }
+  } catch (error) { console.error('Sütun ayarı kaydedilemedi') }
+}
+
+const notKaydet = async (studentId) => {
+  const veri = tumNotlar.value[`${studentId}-${seciliBrans.value}`]
+  
+  const cleanTarget = (veri.target === "" || veri.target === null) ? null : parseInt(veri.target)
+  const cleanPractices = []
+  for (let i = 0; i < sutunSayisi.value; i++) {
+    cleanPractices[i] = (veri.practices[i] === "" || veri.practices[i] === null || veri.practices[i] === undefined) 
+                        ? null 
+                        : parseInt(veri.practices[i])
+  }
+
+  islemDurumu.value = 'Kaydediliyor...'
+  try {
+    await axios.post('http://localhost:3000/api/pre-exams/result', {
+      studentId: studentId,
+      term: seciliDonem.value,
+      subject: seciliBrans.value,
+      targetScore: cleanTarget,
+      practiceScores: cleanPractices
+    })
+    islemDurumu.value = 'Kaydedildi!'
+    setTimeout(() => islemDurumu.value = '', 1000)
+  } catch (error) {
+    islemDurumu.value = 'Hata!'
+  }
+}
+
+const oncekiYaziliBilgisi = (studentId) => {
+  if (seciliDonem.value === '1D1Y') return null;
+  
+  const val = oncekiNotlar.value[studentId];
+  const puan = (val !== undefined && val !== null) ? val : '-';
+
+  if (seciliDonem.value === '1D2Y') return `1. Yazılı: ${puan}`;
+  if (seciliDonem.value === '2D1Y') return `1. Dönem Ort: ${puan}`;
+  if (seciliDonem.value === '2D2Y') return `1. Yazılı: ${puan}`;
+  return null;
+}
+
+const ogrenciOrtalama = (studentId) => {
+  const veri = tumNotlar.value[`${studentId}-${seciliBrans.value}`]
+  if (!veri) return null
+  
+  let toplam = 0, sayi = 0
+  for (let i = 0; i < sutunSayisi.value; i++) {
+    if (veri.practices[i] !== null && veri.practices[i] !== undefined && veri.practices[i] !== "") {
+      toplam += parseInt(veri.practices[i])
+      sayi++
+    }
+  }
+  return sayi > 0 ? Math.round(toplam / sayi) : null
+}
+
+const ogrenciFark = (studentId) => {
+  const ort = ogrenciOrtalama(studentId)
+  const veri = tumNotlar.value[`${studentId}-${seciliBrans.value}`]
+  if (ort === null || !veri || veri.target === null || veri.target === "") return null
+  return ort - parseInt(veri.target) 
+}
+
+const sinifHedefOrtalamasi = computed(() => {
+  let toplam = 0, sayi = 0
+  etutStore.gosterilenTalebeler.forEach(t => {
+    const veri = tumNotlar.value[`${t.id}-${seciliBrans.value}`]
+    if (veri && veri.target !== null && veri.target !== "") {
+      toplam += parseInt(veri.target); sayi++
+    }
+  })
+  return sayi > 0 ? Math.round(toplam / sayi) : '-'
+})
+
+const sinifYoyOrtalamasi = (index) => {
+  let toplam = 0, sayi = 0
+ etutStore.gosterilenTalebeler.forEach(t => {
+    const veri = tumNotlar.value[`${t.id}-${seciliBrans.value}`]
+    if (veri && veri.practices[index] !== null && veri.practices[index] !== undefined && veri.practices[index] !== "") {
+      toplam += parseInt(veri.practices[index]); sayi++
+    }
+  })
+  return sayi > 0 ? Math.round(toplam / sayi) : '-'
+}
+
+const sinifGenelOrtalama = computed(() => {
+  let toplam = 0, sayi = 0
+  etutStore.gosterilenTalebeler.forEach(t => {
+    const ort = ogrenciOrtalama(t.id)
+    if (ort !== null) { toplam += ort; sayi++ }
+  })
+  return sayi > 0 ? Math.round(toplam / sayi) : '-'
+})
+
+const sinifFarkOrtalamasi = computed(() => {
+  let toplam = 0, sayi = 0
+ etutStore.gosterilenTalebeler.forEach(t => {
+    const fark = ogrenciFark(t.id)
+    if (fark !== null) { toplam += fark; sayi++ }
+  })
+  return sayi > 0 ? Math.round(toplam / sayi) : '-'
+})
+</script>
+
+<template>
+  <div class="sayfa-container">
+    <h2>Sayfa 6 - Yazılı Öncesi Yazılı (Y.Ö.Y) Neticeleri</h2>
+
+    <div class="filtre-paneli">
+      <div class="filtre-grup">
+        <label>📚 Dönem Seçin:</label>
+        <select v-model="seciliDonem" class="input-kutu select-kalin">
+          <option v-for="donem in donemler" :key="donem.id" :value="donem.id">{{ donem.ad }}</option>
+        </select>
+      </div>
+      <div class="ayirici"></div>
+      <div class="filtre-grup">
+        <label>🏷️ Branş Seçin:</label>
+        <div class="brans-butonlari">
+          <button 
+            v-for="brans in branslar" :key="brans" 
+            @click="seciliBrans = brans"
+            class="btn-brans"
+            :class="{'aktif': seciliBrans === brans}"
+          >
+            {{ brans }}
+          </button>
+        </div>
+      </div>
+      <div v-if="islemDurumu" class="toast">{{ islemDurumu }}</div>
+    </div>
+
+    <table class="etut-table" v-if="Object.keys(tumNotlar).length > 0">
+      <thead>
+        <tr>
+          <th style="width: 50px;">Sıra</th>
+          <th style="width: 200px;">Ad Soyad</th>
+          <th class="hedef-baslik">🎯 Hedef (Okul)</th>
+          
+          <th v-for="i in sutunSayisi" :key="i" class="yoy-baslik">
+            Y.Ö.Y {{ i }}
+            <div class="sutun-kontrolleri" v-if="i === sutunSayisi">
+              <button @click="sutunCikar" class="btn-ufak btn-kirmizi" title="Sütun Çıkar" :disabled="sutunSayisi === 1">-</button>
+              <button @click="sutunEkle" class="btn-ufak btn-yesil" title="Sütun Ekle">+</button>
+            </div>
+          </th>
+
+          <th class="sonuc-baslik">📊 Ort.</th>
+          <th class="sonuc-baslik">⚖️ Fark</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="(talebe, index) in etutStore.gosterilenTalebeler" :key="talebe.id">
+          <td>{{ talebe.orderIndex }}</td>
+          <td><strong>{{ talebe.fullName }}</strong></td>
+          
+          <td class="hedef-hucre">
+            <div class="hedef-kutu-wrapper">
+              <input type="number" 
+                     v-model="tumNotlar[`${talebe.id}-${seciliBrans}`].target" 
+                     @blur="notKaydet(talebe.id)"
+                     class="not-input hedef-input" placeholder="Hedef" />
+                     
+              <span class="dipnot-yazi" v-if="oncekiYaziliBilgisi(talebe.id)">
+                {{ oncekiYaziliBilgisi(talebe.id) }}
+              </span>
+            </div>
+          </td>
+
+          <td v-for="i in sutunSayisi" :key="i" class="yoy-hucre">
+            <input type="number" 
+                   v-model="tumNotlar[`${talebe.id}-${seciliBrans}`].practices[i-1]" 
+                   @blur="notKaydet(talebe.id)"
+                   class="not-input" placeholder="Not" />
+          </td>
+
+          <td class="hesap-hucre">
+            <strong>{{ ogrenciOrtalama(talebe.id) !== null ? ogrenciOrtalama(talebe.id) : '-' }}</strong>
+          </td>
+          <td class="hesap-hucre" :class="{
+            'fark-arti': ogrenciFark(talebe.id) > 0, 
+            'fark-eksi': ogrenciFark(talebe.id) < 0,
+            'fark-sifir': ogrenciFark(talebe.id) === 0
+          }">
+            <strong>
+              {{ ogrenciFark(talebe.id) !== null ? (ogrenciFark(talebe.id) > 0 ? '+' : '') + ogrenciFark(talebe.id) : '-' }}
+            </strong>
+          </td>
+        </tr>
+      </tbody>
+      
+      <tfoot>
+        <tr class="analiz-satiri">
+          <td colspan="2" style="text-align: right;"><strong>📈 Sınıf Analizi:</strong></td>
+          <td class="hedef-hucre" style="text-align: center;"><strong>{{ sinifHedefOrtalamasi }}</strong></td>
+          
+          <td v-for="i in sutunSayisi" :key="i" class="yoy-hucre" style="text-align: center;">
+            <strong>{{ sinifYoyOrtalamasi(i-1) }}</strong>
+          </td>
+          
+          <td class="hesap-hucre" style="text-align: center; color:#1d4ed8;"><strong>{{ sinifGenelOrtalama }}</strong></td>
+          <td class="hesap-hucre" style="text-align: center;" :class="{
+            'fark-arti': sinifFarkOrtalamasi > 0, 
+            'fark-eksi': sinifFarkOrtalamasi < 0
+          }">
+            <strong>{{ sinifFarkOrtalamasi !== '-' ? (sinifFarkOrtalamasi > 0 ? '+' : '') + sinifFarkOrtalamasi : '-' }}</strong>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</template>
+
+<style scoped>
+.sayfa-container { padding: 20px; font-family: sans-serif; }
+
+.filtre-paneli { display: flex; align-items: center; gap: 20px; background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.filtre-grup { display: flex; align-items: center; gap: 10px; }
+.filtre-grup label { font-weight: bold; color: #334155; }
+.input-kutu { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 1rem; cursor: pointer; }
+.select-kalin { font-weight: bold; color: #1e293b; background-color: #f8fafc; }
+.ayirici { width: 2px; height: 30px; background-color: #e2e8f0; margin: 0 5px; }
+
+.brans-butonlari { display: flex; gap: 8px; }
+.btn-brans { padding: 8px 15px; border: 1px solid #cbd5e1; background: white; border-radius: 6px; font-weight: bold; color: #64748b; cursor: pointer; transition: 0.2s; }
+.btn-brans:hover { background: #f1f5f9; }
+.btn-brans.aktif { background: #3b82f6; color: white; border-color: #2563eb; }
+
+.etut-table { width: 100%; border-collapse: collapse; box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: white; border-radius: 8px; overflow: hidden; }
+.etut-table th, .etut-table td { padding: 10px; text-align: center; border: 1px solid #e2e8f0; vertical-align: middle; }
+.etut-table th:nth-child(2), .etut-table td:nth-child(2) { text-align: left; }
+.etut-table th { background-color: #f8fafc; color: #334155; font-size: 0.95rem; }
+.etut-table tr:hover { background-color: #f8fafc; }
+
+.hedef-baslik { background-color: #fffbeb !important; color: #b45309 !important; }
+.hedef-hucre { background-color: #fefce8; }
+.yoy-baslik { background-color: #f0fdf4 !important; color: #166534 !important; position: relative; }
+.yoy-hucre { background-color: #f8fafc; }
+.sonuc-baslik { background-color: #eff6ff !important; color: #1d4ed8 !important; }
+
+.sutun-kontrolleri { display: flex; justify-content: center; gap: 5px; margin-top: 5px; }
+.btn-ufak { width: 24px; height: 24px; border: none; border-radius: 4px; font-weight: bold; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1rem; }
+.btn-yesil { background: #10b981; } .btn-yesil:hover { background: #059669; }
+.btn-kirmizi { background: #ef4444; } .btn-kirmizi:hover { background: #dc2626; }
+.btn-ufak:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.hedef-kutu-wrapper { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.dipnot-yazi { font-size: 0.75rem; color: #b45309; font-weight: bold; font-style: italic; background: #fffbeb; padding: 2px 8px; border-radius: 4px; border: 1px dashed #fcd34d; }
+
+.not-input { width: 60px; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; text-align: center; font-weight: bold; font-size: 1rem; color: #334155; }
+.not-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+.hedef-input { border-color: #fcd34d; background: #fffbeb; }
+
+.hesap-hucre { font-size: 1.1rem; }
+.fark-arti { color: #166534; background-color: #dcfce7 !important; }
+.fark-eksi { color: #b91c1c; background-color: #fee2e2 !important; }
+.fark-sifir { color: #475569; }
+
+.analiz-satiri { background-color: #e2e8f0 !important; font-size: 1.1rem; }
+.analiz-satiri td { padding: 15px 10px; border-top: 2px solid #cbd5e1; }
+
+.toast { margin-left: auto; background: #dcfce7; color: #166534; padding: 8px 15px; border-radius: 6px; font-weight: bold; }
+</style>
