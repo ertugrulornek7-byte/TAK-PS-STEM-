@@ -8,23 +8,19 @@ const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 const HierarchyService = require('../services/hierarchyService');
 
-// DİKKAT: Bu satır sayesinde bu dosyadaki TÜM rotalar KİMLİK KONTROLÜNDEN geçmek zorunda!
 router.use(authenticate); 
 
 // ==========================================
-// 1. TALEBELERİ GETİR (Sadece Kendi Makamına Göre)
+// 1. TALEBELERİ GETİR
 // ==========================================
 router.get('/', async (req, res) => {
   try {
-    // 🎯 Eski karmaşık if-else blokları GİTTİ! Merkezi servis bizim yerimize filtreyi veriyor.
     const whereFilter = HierarchyService.getStudentFilter(req.user);
 
-    // Eğer sayfadan özellikle bir kurum seçildiyse ve kullanıcının buna yetkisi varsa ekle
     const { institutionId } = req.query;
-    if (institutionId) {
-      whereFilter.institutionId = institutionId;
-    }
-
+   if (institutionId) {
+  whereFilter = { AND: [whereFilter, { institutionId }] };
+}
     const students = await prisma.student.findMany({
       where: whereFilter,
       orderBy: [{ status: 'asc' }, { orderIndex: 'asc' }],
@@ -45,16 +41,17 @@ router.post('/', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req,
   try {
     const { studentCode, fullName, institutionId, classId, orderIndex } = req.body;
     
-    // 🔥 YENİ DOKUNUŞ: Frontend'den gelmezse, yapan adamın kendi kurumunu al!
     const targetInstitution = institutionId || req.user.institutionId;
-    
+    if (!HierarchyService.assertOwnsInstitution(req.user, targetInstitution)) {
+  return res.status(403).json({ error: 'Sadece yetkili olduğunuz kuruma işlem yapabilirsiniz.' });
+}
     if (!targetInstitution) return res.status(400).json({ error: 'Kurum tespit edilemedi!' });
 
     const newStudent = await prisma.student.create({
       data: { 
         studentCode, 
         fullName, 
-        institutionId: targetInstitution, // Burayı güncelledik
+        institutionId: targetInstitution,
         orderIndex: orderIndex || 999, 
         classId: classId || null 
       }
@@ -66,42 +63,32 @@ router.post('/', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req,
   }
 });
 
-// TOPLU TALEBE YÜKLEME (EXCEL)
+// ==========================================
+// 3. TOPLU TALEBE YÜKLEME (EXCEL)
+// ==========================================
 router.post('/bulk', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   try {
     const { studentsData } = req.body;
     let eklenenCount = 0;
 
-    // Excel'den gelen her bir satır için işlem yap
     for (const data of studentsData) {
-      
-      // Kurum ID'sini güvene al: Eğer Excel'de kurum belirtilmemişse, yükleyen kişinin kendi kurumunu baz al.
       const targetInstitutionId = data.institutionId || req.user.institutionId;
-      
-      if (!targetInstitutionId) {
-        continue; // Kurum bulunamadıysa bu satırı atla
-      }
+      if (!targetInstitutionId) continue; 
 
-      // UPSERT: Varsa Güncelle, Yoksa Yeni Oluştur!
       await prisma.student.upsert({
-        where: { 
-          studentCode: data.studentCode // Talebe koduna göre arar
-        },
+        where: { studentCode: data.studentCode },
         update: {
-          // Eğer bu talebe kodu zaten varsa, sadece ismini ve sınıfını günceller. ÇÖKMEZ!
           fullName: data.fullName,
           classId: data.classId || null,
           institutionId: targetInstitutionId
         },
         create: {
-          // Eğer bu talebe kodu hiç yoksa, sıfırdan oluşturur.
           studentCode: data.studentCode,
           fullName: data.fullName,
           classId: data.classId || null,
           institutionId: targetInstitutionId
         }
       });
-      
       eklenenCount++;
     }
 
@@ -127,22 +114,34 @@ router.delete('/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async 
 
     if (!student) return res.status(404).json({ error: 'Talebe bulunamadı.' });
 
-    // KURUM_EM: Pasife Al
+    // KURUM: Pasife Al ve Görev Oluştur
     if (role === 'KURUM') {
       await prisma.student.update({ where: { id: sId }, data: { status: 'PASIF' } });
       
-      // 📝 AUDIT LOG YAZILIYOR
+      // 📝 AUDIT LOG
       await prisma.auditLog.create({
         data: { userId: req.user.id, action: 'SOFT_DELETE', targetType: 'Student', targetId: sId, before: JSON.stringify(student) }
       });
 
       const mintikaManagerId = student.institution.district?.managerId;
       if (mintikaManagerId) {
-        await prisma.task.create({
+        // 🔥 ÇÖZÜM BURADA: Eski receiverId yapısı atılıp yeni TaskAssignment yapısına geçildi
+        const notifyTask = await prisma.task.create({
           data: {
             title: '⚠️ Talebe Silme Onayı Bekliyor',
             description: `${student.institution.name} kurumundan ${student.fullName} adlı talebe pasife alındı.`,
-            status: 'BEKLIYOR', senderId: req.user.id, receiverId: mintikaManagerId, institutionId: student.institutionId
+            status: 'BEKLIYOR', 
+            moduleType: 'GENEL',
+            senderId: req.user.id, 
+            institutionId: student.institutionId
+          }
+        });
+
+        // Yeni Atama Modeli ile Kullanıcıya Bağlama
+        await prisma.taskAssignment.create({
+          data: {
+            taskId: notifyTask.id,
+            userId: mintikaManagerId
           }
         });
       }
@@ -159,7 +158,7 @@ router.delete('/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async 
       await prisma.testBookResult.deleteMany({ where: { studentId: sId } });
       await prisma.student.delete({ where: { id: sId } });
 
-      // 📝 AUDIT LOG YAZILIYOR
+      // 📝 AUDIT LOG
       await prisma.auditLog.create({
         data: { userId: req.user.id, action: 'HARD_DELETE', targetType: 'Student', targetId: sId, before: JSON.stringify(student) }
       });
@@ -167,6 +166,7 @@ router.delete('/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async 
       return res.json({ message: 'Talebe kalıcı olarak silindi.' });
     }
   } catch (error) { 
+    console.error("Öğrenci silme hatası:", error);
     res.status(500).json({ error: 'İşlem başarısız.' }); 
   }
 });

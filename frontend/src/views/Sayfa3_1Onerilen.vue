@@ -2,12 +2,12 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useEtutStore } from '../stores/etutStore'
-import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
-import axios from 'axios'
+import { useAuthStore } from '../stores/authStore'
+import api from '../api/axios' // 🔥 GÜVENLİ API EKLENDİ (Hardcoded Link Kaldırıldı)
 
 const router = useRouter()
 const etutStore = useEtutStore()
-const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
+const authStore = useAuthStore() 
 
 const bulutKitaplar = ref([
   { id: 1, title: 'Riyazüs Salihin', yazar: 'İmam Nevevi', totalPages: 850, kategori: 'Hadis' },
@@ -16,23 +16,23 @@ const bulutKitaplar = ref([
 ])
 
 const kütüphaneyeKopyala = async (kitap) => {
-  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  const kurumId = authStore.user?.institutionId 
   if (!kurumId) {
     alert("Kurum kimliği bulunamadı, lütfen sayfayı yenileyin veya tekrar giriş yapın.")
     return
   }
 
   try {
-    await axios.post('http://localhost:3000/api/books', {
+    // 🔥 DİNAMİK API KULLANIMI: localhost:3000 silindi
+    await api.post('/books', {
       title: kitap.title,
       totalPages: kitap.totalPages,
-      institutionId: kurumId // GÜVENLİ MÜHÜR BASILDI
+      institutionId: kurumId 
     })
     
     alert(`✔️ "${kitap.title}" başarıyla kurum kütüphanenize eklendi!`)
     router.push('/kitap') 
   } catch (error) {
-    // Bulut sayfasında da aynı kitap varsa uyarı verip eklemeyi durduracak
     if (error.response && error.response.data.error) {
       alert(`❌ İşlem İptal Edildi: ${error.response.data.error}`);
     } else {

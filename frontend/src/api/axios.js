@@ -1,10 +1,9 @@
 import axios from 'axios';
 import { useAuthStore } from '../stores/authStore';
 
-// 1. Merkezi Axios Örneği (Instance) Oluşturuluyor
 const api = axios.create({
-  // İleride bu kısmı .env dosyasından alacağız (import.meta.env.VITE_API_URL)
-  baseURL: 'http://localhost:3000/api', 
+  // 🔥 Artık linki .env dosyasından okuyacak! Bulamazsa localhost'a düşecek.
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api', 
   headers: {
     'Content-Type': 'application/json'
   }

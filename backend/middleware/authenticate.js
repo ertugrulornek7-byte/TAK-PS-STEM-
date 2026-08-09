@@ -14,8 +14,15 @@ const authenticate = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     
     // Güvenlik: Şifreyi .env dosyasından alıyoruz
-    const secretKey = process.env.JWT_SECRET || 'etut_takip_cok_gizli_anahtar_2026';
-    const decoded = jwt.verify(token, secretKey);
+    if (!process.env.JWT_SECRET) {
+      console.error("🚨 KRİTİK HATA: .env dosyasında JWT_SECRET tanımlı değil! Sunucu başlatılamıyor.");
+      process.exit(1); // Uygulamayı güvenli bir şekilde durdurur
+    }
+    
+    const JWT_SECRET = process.env.JWT_SECRET;
+    
+    // 🔥 DÜZELTME BURADA: Artık secretKey yerine tanımladığımız JWT_SECRET kullanılıyor
+    const decoded = jwt.verify(token, JWT_SECRET);
 
     // 3. Veritabanından bu kullanıcıyı tapu kayıtlarıyla (Mıntıka, Kurum) birlikte çekiyoruz
     const user = await prisma.user.findUnique({

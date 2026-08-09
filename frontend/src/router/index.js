@@ -37,7 +37,7 @@ const router = createRouter({
     { path: '/gorevler', name: 'gorevler', component: SayfaGorevler },
     { path: '/yetki', name: 'YetkiYonetimi', component: Sayfa12Yetki },
     { path: '/toplu-ogrenci-ekle',name: 'TopluOgrenciEkle', component: () => import('../views/TopluOgrenciEkle.vue')},
-    {path: '/admin', name: 'AdminPanel',component: AdminPanel},,
+    {path: '/admin', name: 'AdminPanel',component: AdminPanel},
   ]
 })
 

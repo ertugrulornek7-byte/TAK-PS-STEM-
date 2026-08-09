@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-
+const authenticate = require('../middleware/authenticate');
+router.use(authenticate);
 // ==========================================
 // ALT MODÜL: AĞ VE DAVET SİSTEMİ
 // ==========================================

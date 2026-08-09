@@ -1,12 +1,12 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
-import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
+import { useAuthStore } from '../stores/authStore' 
 import { useRoute, useRouter } from 'vue-router'
-import api from '../api/axios'
+import api from '../api/axios' // 🔥 GÜVENLİ API
 
 const etutStore = useEtutStore()
-const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
+const authStore = useAuthStore() 
 const route = useRoute()
 const router = useRouter()
 const islemDurumu = ref('')
@@ -14,7 +14,6 @@ const islemDurumu = ref('')
 const seciliTalebeId = ref('')
 const raporBasligi = ref('2025-2026 EĞİTİM YILI 1. DÖNEM GELİŞİM RAPORU')
 
-// Beyaz ekran hatası (L harfi) düzeltildi!
 const moduller = ref({
   yoklama: true,
   performans: true,
@@ -35,7 +34,6 @@ onMounted(async () => {
     await etutStore.talebeleriGetir()
   }
   
-  // Sayfa 1'den gelen ID'yi otomatik yakala ve karneyi oluştur!
   if (route.params.studentId) {
     seciliTalebeId.value = route.params.studentId
     await karneOlustur()
@@ -45,7 +43,6 @@ onMounted(async () => {
 const karneOlustur = async () => {
   if (!seciliTalebeId.value) return
 
-  // HAYALET VERİ ÇÖZÜMÜ (Kurum güvenlik kontrolü)
   const kurumId = authStore.user?.institutionId 
   if (!kurumId) {
     alert("Kurum kimliği doğrulanamadı. Lütfen sayfayı yenileyin.");
@@ -54,7 +51,8 @@ const karneOlustur = async () => {
 
   islemDurumu.value = 'Veriler Toplanıyor...'
   try {
-    const res = await axios.get(`http://localhost:3000/api/report/${seciliTalebeId.value}`)
+    // 🔥 DÜZELTME: Hatalı axios.get() yerine güvenli dinamik api isteği eklendi
+    const res = await api.get(`/students/${seciliTalebeId.value}/karne`) 
     karneVerisi.value = res.data
     
     islemDurumu.value = 'Karne Hazır!'
@@ -69,7 +67,7 @@ const seciliTalebeBilgisi = computed(() => {
 })
 
 const geriDon = () => {
-  router.push('/') // Sayfa 1'e geri döner
+  router.push('/') 
 }
 
 const pdfIndir = () => {

@@ -6,59 +6,12 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 // Güvenlik: Şifreyi .env dosyasından alıyoruz, yoksa geçici bir anahtar kullanıyoruz
-const JWT_SECRET = process.env.JWT_SECRET || 'etut_takip_cok_gizli_anahtar_2026';
+if (!process.env.JWT_SECRET) {
+  console.error("🚨 KRİTİK HATA: .env dosyasında JWT_SECRET tanımlı değil! Sunucu başlatılamıyor.");
+  process.exit(1); // Uygulamayı güvenli bir şekilde durdurur
+}
+const JWT_SECRET = process.env.JWT_SECRET;
 
-// ==========================================
-// 1. KULLANICI GİRİŞİ (LOGIN) - BİLET ÜRETİM MERKEZİ
-// ==========================================
-router.post('/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    // Kullanıcıyı veritabanında bul
-    const user = await prisma.user.findUnique({
-      where: { username },
-      include: {
-        district: true,
-        institution: true
-      }
-    });
-
-    if (!user) {
-      return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
-    }
-
-    // Şifre kontrolü
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
-    }
-
-    // JWT Token Üretimi (24 Saatlik Geçerli Bilet)
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        username: user.username, 
-        roleLevel: user.roleLevel // Yeni makam sistemimiz biletin içine işleniyor
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' } 
-    );
-
-    // Güvenlik: Şifreyi frontend'e (ön yüze) asla gönderme!
-    const { password: _, ...userWithoutPassword } = user;
-
-    res.json({
-      message: 'Giriş başarılı',
-      token,
-      user: userWithoutPassword
-    });
-
-  } catch (error) {
-    console.error("Login Hatası:", error);
-    res.status(500).json({ error: 'Sunucu hatası, giriş yapılamadı.' });
-  }
-});
 
 // ==========================================
 // 2. İLK KURULUM - KURUCU ADMİN OLUŞTURMA (Sihirli arka kapı yerine güvenli kurulum)

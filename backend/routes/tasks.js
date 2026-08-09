@@ -158,17 +158,6 @@ router.post('/calculate-progress', async (req, res) => {
       });
     }
 
-    // Ana görev tablosunu yüzdelik ile ortalama olarak güncelle
-    const allProgresses = await prisma.taskProgress.findMany({ where: { taskId: task.id }});
-    const avgProgress = allProgresses.length > 0 
-      ? Math.round(allProgresses.reduce((sum, p) => sum + p.percentage, 0) / allProgresses.length) 
-      : 0;
-
-    await prisma.task.update({
-      where: { id: task.id },
-      data: { progress: avgProgress }
-    });
-
     res.json(progress);
   } catch (error) {
     console.error("Hesaplama hatası:", error);

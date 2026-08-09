@@ -34,25 +34,29 @@ const aktifSiniflar = computed(() => {
   return seciliKurumNevi.value === 'LISE' ? LISE_SINIFLARI : ORTAOKUL_SINIFLARI
 })
 
-// ==========================================
-// YETKİ KALKANI MOTORU
-// ==========================================
 const yetkiliMi = computed(() => {
-  const role = authStore.user?.roleLevel
-  return role && role !== 'PERSONEL' // Personel bu sayfayı GÖREMEZ
-})
+  // Ya üst makam olacak ya da kurum mesulü olacak (Personel giremez)
+  return ustMakamMi.value || kurumMesuluMu.value;
+});
 
+// GÜNCEL YETKİ KONTROLLERİ (Yeni Şemaya Göre)
 const ustMakamMi = computed(() => {
-  const role = authStore.user?.roleLevel
-  return role === 'SISTEM' || role === 'BOLGE' || role === 'MINTIKA'
-})
+  if (!authStore.user) return false;
+  // Sadece bu 3 rol üst makamdır
+  return ['SISTEM', 'BOLGE', 'MINTIKA'].includes(authStore.user.roleLevel);
+});
+
+const kurumMesuluMu = computed(() => {
+  if (!authStore.user) return false;
+  // Sadece KURUM rolü
+  return authStore.user.roleLevel === 'KURUM';
+});  
 
 const kurumlariGetir = async () => {
   if (!authStore.user) return;
 
   // Eğer üst makam (Sistem, Bölge, Mıntıka) DEĞİLSE:
   if (!ustMakamMi.value) {
-    // Kurum mesulü ise kendi kurumunu seç ve personelleri getir
     if (authStore.user.roleLevel === 'KURUM') {
       seciliKurumId.value = authStore.user.institutionId || ''
       seciliKurumNevi.value = authStore.user.institution?.nevi || 'ORTAOKUL'
@@ -60,11 +64,10 @@ const kurumlariGetir = async () => {
         await personelleriVeYetkileriGetir()
       }
     }
-    // GÜVENLİK KİLİDİ: Kurum veya Personel fark etmez, buradan aşağıya inemez! 403 yememek için durduruyoruz.
+    
     return; 
   }
-  
-  // Sadece ÜST MAKAMLAR (Sistem, Bölge, Mıntıka) buraya ulaşıp tüm kurumları çekebilir
+
   try {
     const res = await api.get('/hierarchy/institutions')
     kurumlar.value = res.data || []
