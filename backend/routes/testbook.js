@@ -1,16 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
+// 🔥 GÜVENLİK KALKANLARI İÇERİ ALINIYOR
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
+
+// DİKKAT: Bu dosyaya gelen tüm istekler Kimlik Kontrolünden geçmek zorundadır!
+router.use(authenticate);
 const prisma = new PrismaClient();
 
 // YENİ KONU EKLEME (SINIF BAZLI)
 router.post('/topic', async (req, res) => {
   try {
-    const { institutionId, subject, title, normalQuestionCount, yeniNesilCount, orderIndex, classGroupId } = req.body;
+    const { institutionId, subject, title, normalQuestionCount, yeniNesilCount, orderIndex, classId } = req.body;
     const topic = await prisma.testBookTopic.create({
       data: { 
         institutionId, subject, title, normalQuestionCount, yeniNesilCount, orderIndex, 
-        classGroupId: classGroupId || "GENEL" 
+        classId: classId || "GENEL" 
       }
     });
     res.json(topic);
@@ -35,16 +41,16 @@ router.post('/result', async (req, res) => {
 });
 
 // TESTLERİ ÇEKME (SINIF BAZLI)
-router.get('/:institutionId/:subject/:classGroupId', async (req, res) => {
+router.get('/:institutionId/:subject/:classId', async (req, res) => {
   try {
-    const { institutionId, subject, classGroupId } = req.params;
-    const cId = classGroupId && classGroupId !== 'undefined' ? classGroupId : "GENEL";
+    const { institutionId, subject, classId } = req.params;
+    const cId = classId && classId !== 'undefined' ? classId : "GENEL";
 
     const topics = await prisma.testBookTopic.findMany({
       where: { 
         institutionId, 
         subject,
-        OR: [ { classGroupId: cId }, { classGroupId: "GENEL" } ]
+        OR: [ { classId: cId }, { classId: "GENEL" } ]
       },
       orderBy: { orderIndex: 'asc' },
       include: { results: true }

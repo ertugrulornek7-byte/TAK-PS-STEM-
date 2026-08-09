@@ -11,7 +11,6 @@ const authStore = useAuthStore()
 const yeniKod = ref('')
 const yeniAd = ref('')
 const seciliSinif = ref('')
-const seciliSeviye = ref('')
 const islemDurumu = ref('')
 
 // YETKİ SEVİYELERİ
@@ -26,23 +25,55 @@ const isUstYonetim = computed(() => isAdmin.value || isBolgeEM.value || isMintik
 const aktifKurumFiltresi = ref('')
 const aktifSinifFiltresi = ref('')
 
+// YENİ SİSTEM: Sabit Sınıf Listeleri
+const ORTAOKUL_SINIFLARI = [
+  { id: '4_NEHARI', name: '4. Sınıf Nehari' },
+  { id: '5_SINIF', name: '5. Sınıf' },
+  { id: '6_SINIF', name: '6. Sınıf' },
+  { id: '7_SINIF', name: '7. Sınıf' },
+  { id: '8_SINIF', name: '8. Sınıf' }
+]
+
+const LISE_SINIFLARI = [
+  { id: '8_NEHARI', name: '8. Sınıf Nehari' },
+  { id: 'LISE_1', name: 'Lise 1' },
+  { id: 'LISE_2', name: 'Lise 2' },
+  { id: 'LISE_3', name: 'Lise 3' }
+]
+
+// Aktif kurumun nevisine göre sınıfları getir
+const aktifSiniflar = computed(() => {
+  const nevi = authStore.user?.institution?.nevi || 'ORTAOKUL'
+  return nevi === 'LISE' ? LISE_SINIFLARI : ORTAOKUL_SINIFLARI
+})
+
+// ID'yi okunabilir isme çeviren yardımcı fonksiyon
+const sinifAdiniBul = (classId) => {
+  const tumSiniflar = [...ORTAOKUL_SINIFLARI, ...LISE_SINIFLARI]
+  const sinif = tumSiniflar.find(s => s.id === classId)
+  return sinif ? sinif.name : 'Atanmamış / Bağımsız Talebeler'
+}
+
 const kaydet = async () => {
   if (!yeniKod.value || !yeniAd.value) return
   const yeniSira = etutStore.talebler?.length > 0 ? Math.max(...etutStore.talebler.map(t => t.orderIndex)) + 1 : 1
   islemDurumu.value = 'Kaydediliyor...'
   try {
     await etutStore.talebeEkle({ 
-      studentCode: yeniKod.value, fullName: yeniAd.value, orderIndex: yeniSira,
-      classId: seciliSinif.value || null, levelGroupId: seciliSeviye.value || null
+      studentCode: yeniKod.value, 
+      fullName: yeniAd.value, 
+      orderIndex: yeniSira,
+      classId: seciliSinif.value || null 
+      // Seviye ID tamamen kaldırıldı!
     })
-    yeniKod.value = ''; yeniAd.value = ''; seciliSinif.value = ''; seciliSeviye.value = ''
+    yeniKod.value = ''; yeniAd.value = ''; seciliSinif.value = '';
     islemDurumu.value = 'Eklendi!'; setTimeout(() => islemDurumu.value = '', 1500)
   } catch (error) { islemDurumu.value = 'Hata!' }
 }
 
 const karneGor = (id) => router.push(`/karne/${id}`)
 
-// AKILLI GRUPLAMA VE FİLTRELEME MOTORU
+// AKILLI GRUPLAMA VE FİLTRELEME MOTORU (YENİ SİSTEME UYARLANDI)
 const gruplanmisTalebeler = computed(() => {
   let talebeler = etutStore.gosterilenTalebeler || []
 
@@ -51,17 +82,18 @@ const gruplanmisTalebeler = computed(() => {
     talebeler = talebeler.filter(t => t.institutionId === aktifKurumFiltresi.value)
   }
   if (aktifSinifFiltresi.value) {
-    talebeler = talebeler.filter(t => t.class?.name === aktifSinifFiltresi.value)
+    talebeler = talebeler.filter(t => t.classId === aktifSinifFiltresi.value)
   }
 
   // 2. AŞAMA: Hiyerarşik Gruplama
   const gruplar = {}
 
   talebeler.forEach(t => {
-    // Kurum ve Sınıf isimlerini güvenli bir şekilde al
     const kurumAdi = t.institution?.name || 'Kendi Kurumunuz'
-    const sinifAdi = t.class?.name || 'Atanmamış / Bağımsız Talebeler'
-    const sinifMesulu = t.class?.managers?.map(m => m.fullName).join(', ') || 'Mesul Atanmamış'
+    const sinifAdi = sinifAdiniBul(t.classId)
+    // Sınıf mesulü mantığını şimdilik geçici bir metinle dolduruyoruz, 
+    // ileride backend'den personel listesiyle eşleştirebiliriz.
+    const sinifMesulu = 'Kurum Hocaları'
 
     // Üst yönetimse önce kuruma, sonra sınıfa göre grupla
     if (isUstYonetim.value) {
@@ -79,21 +111,21 @@ const gruplanmisTalebeler = computed(() => {
   return gruplar
 })
 
-// Dinamik Sınıf Listesi (Filtre için benzersiz sınıfları çeker)
+// Dinamik Sınıf Listesi (Filtre için)
 const benzersizSinifIsimleri = computed(() => {
   const siniflar = new Set()
   if (etutStore.gosterilenTalebeler) {
     etutStore.gosterilenTalebeler.forEach(t => {
-      if (t.class?.name) siniflar.add(t.class.name)
+      if (t.classId) siniflar.add(t.classId)
     })
   }
-  return Array.from(siniflar).sort()
+  // ID'leri objelere çevirip döndür
+  return Array.from(siniflar).map(id => ({ id, name: sinifAdiniBul(id) }))
 })
 
 onMounted(() => {
   setTimeout(async () => {
     if (!etutStore.talebler || etutStore.talebler.length === 0) { await etutStore.talebeleriGetir() }
-    await etutStore.gruplariGetir()
   }, 300)
 })
 </script>
@@ -120,13 +152,12 @@ onMounted(() => {
           </option>
         </select>
 
-        <!-- Sınıf Filtresi -->
         <select v-model="aktifSinifFiltresi" class="input-text vurgulu-secim">
-          <option value="">📚 Tüm Sınıfları Göster</option>
-          <option v-for="sinifAdi in benzersizSinifIsimleri" :key="sinifAdi" :value="sinifAdi">
-            Sadece {{ sinifAdi }}
-          </option>
-        </select>
+  <option value="">📚 Tüm Sınıfları Göster</option>
+  <option v-for="sinif in benzersizSinifIsimleri" :key="sinif.id" :value="sinif.id">
+    Sadece {{ sinif.name }}
+  </option>
+</select>
 
       </div>
     </div>
@@ -143,9 +174,9 @@ onMounted(() => {
         <input type="text" v-model="yeniAd" placeholder="Ad Soyad" class="input-text uzun" />
         
         <select v-model="seciliSinif" class="input-text">
-          <option value="">-- Sınıf Seç --</option>
-          <option v-for="sinif in etutStore.siniflar" :key="sinif.id" :value="sinif.id">{{ sinif.name }}</option>
-        </select>
+  <option value="">-- Sınıf Seç --</option>
+  <option v-for="sinif in aktifSiniflar" :key="sinif.id" :value="sinif.id">{{ sinif.name }}</option>
+</select>
 
         <button @click="kaydet" class="btn-ekle">+ Talebe Ekle</button>
       </div>

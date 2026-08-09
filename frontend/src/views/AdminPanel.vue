@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useAuthStore } from '../stores/authStore'
-import axios from 'axios'
+import api from '../api/axios' // GÜVENLİ API KULLANIMI
 import * as XLSX from 'xlsx'
 
 const authStore = useAuthStore()
@@ -10,11 +10,10 @@ const organizasyon = ref([])
 const personeller = ref([])
 const islemDurumu = ref('')
 
-// YETKİ KONTROLLERİ
-const userRoles = computed(() => authStore.user?.roles || [])
-const isAdmin = computed(() => userRoles.value.includes('ADMIN'))
-const isBolgeEM = computed(() => userRoles.value.includes('BOLGE_EM'))
-const isMintikaEM = computed(() => userRoles.value.includes('MINTIKA_EM'))
+// YETKİ KONTROLLERİ (Yeni Şemaya Göre Güncellendi)
+const isAdmin = computed(() => authStore.user?.roleLevel === 'SISTEM')
+const isBolgeEM = computed(() => authStore.user?.roleLevel === 'BOLGE' || authStore.user?.roles?.includes('BOLGE_EM'))
+const isMintikaEM = computed(() => authStore.user?.roleLevel === 'MINTIKA' || authStore.user?.roles?.includes('MINTIKA_EM'))
 
 // Form Modelleri (Birimler İçin)
 const yeniBolgeAd = ref('')
@@ -33,8 +32,8 @@ const verileriCek = async () => {
   if (!uId) return
   try {
     const [orgRes, userRes] = await Promise.all([
-      axios.get(`http://localhost:3000/api/admin/organization?userId=${uId}`),
-      axios.get(`http://localhost:3000/api/admin/users?userId=${uId}`)
+      api.get(`/admin/organization?userId=${uId}`),
+      api.get(`/admin/users?userId=${uId}`)
     ])
     organizasyon.value = orgRes.data
     personeller.value = userRes.data
@@ -48,33 +47,41 @@ onMounted(() => { verileriCek() })
 // ==========================================
 const bolgeEkle = async () => {
   if (!yeniBolgeAd.value) return
-  await axios.post('http://localhost:3000/api/admin/region', { name: yeniBolgeAd.value })
-  yeniBolgeAd.value = ''; verileriCek()
+  try {
+    await api.post('/admin/region', { name: yeniBolgeAd.value })
+    yeniBolgeAd.value = ''; verileriCek()
+  } catch (error) { alert("Bölge eklenemedi!") }
 }
 
 const mintikaEkle = async () => {
   if (!yeniMintika.value.name || !yeniMintika.value.regionId) return
-  await axios.post('http://localhost:3000/api/admin/district', yeniMintika.value)
-  yeniMintika.value = { name: '', regionId: '' }; verileriCek()
+  try {
+    await api.post('/admin/district', yeniMintika.value)
+    yeniMintika.value = { name: '', regionId: '' }; verileriCek()
+  } catch (error) { alert("Mıntıka eklenemedi!") }
 }
 
 const kurumEkle = async () => {
   if (!yeniKurum.value.name || !yeniKurum.value.districtId) return
-  await axios.post('http://localhost:3000/api/admin/institution', yeniKurum.value)
-  yeniKurum.value = { name: '', districtId: '' }; verileriCek()
+  try {
+    await api.post('/admin/institution', yeniKurum.value)
+    yeniKurum.value = { name: '', districtId: '' }; verileriCek()
+  } catch (error) { alert("Kurum eklenemedi!") }
 }
 
 const birimSil = async (type, id) => {
   if (!confirm('Bu birimi silmek istediğinize emin misiniz?')) return
   try {
-    await axios.delete(`http://localhost:3000/api/admin/unit/${type}/${id}`)
+    await api.delete(`/admin/unit/${type}/${id}`)
     verileriCek()
   } catch (err) { alert('Silinemedi! Lütfen önce içindeki personelleri veya alt kurumları temizleyin.') }
 }
 
 const tumMintikalar = () => {
   let list = []
-  organizasyon.value.forEach(r => { list = list.concat(r.districts) })
+  if(organizasyon.value) {
+    organizasyon.value.forEach(r => { list = list.concat(r.districts || []) })
+  }
   return list
 }
 
@@ -85,7 +92,7 @@ const tumMintikalar = () => {
 const tekliPersonelEkle = async () => {
   if(!yeniPersonel.value.fullName || !yeniPersonel.value.username) return alert('Ad Soyad ve Kullanıcı Adı zorunludur!')
   try {
-    const res = await axios.post('http://localhost:3000/api/admin/create-user', yeniPersonel.value)
+    const res = await api.post('/admin/create-user', yeniPersonel.value)
     olusturulanSifre.value = res.data.rawPassword
     yeniPersonel.value = { fullName: '', username: '', email: '', institutionId: '' }
     verileriCek()
@@ -94,7 +101,7 @@ const tekliPersonelEkle = async () => {
 
 const sablonIndir = () => {
   const sablonVeri = [
-    { "AD-SOYAD": "Ali Yılmaz", "E-POSTA": "ali@mail.com", "ROL/YETKİ": "STANDART", "MINTIKA": "GEBZE", "KURUM": "ŞEKERPINAR", "ŞİFRE": "1234" },
+    { "AD-SOYAD": "Ali Yılmaz", "E-POSTA": "ali@mail.com", "ROL/YETKİ": "PERSONEL", "MINTIKA": "GEBZE", "KURUM": "ŞEKERPINAR", "ŞİFRE": "1234" },
     { "AD-SOYAD": "Veli Demir", "E-POSTA": "", "ROL/YETKİ": "KURUM", "MINTIKA": "GEBZE", "KURUM": "ÇAYIROVA", "ŞİFRE": "" },
     { "AD-SOYAD": "Ahmet Çelik", "E-POSTA": "", "ROL/YETKİ": "MINTIKA", "MINTIKA": "GEBZE", "KURUM": "", "ŞİFRE": "9876" }
   ];
@@ -115,7 +122,7 @@ const excelYukle = (event) => {
       const workbook = XLSX.read(data, { type: 'array' })
       const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]])
       
-      const res = await axios.post('http://localhost:3000/api/admin/bulk-create-users', { users: jsonData })
+      const res = await api.post('/admin/bulk-create-users', { users: jsonData })
       excelSonuclar.value = res.data.eklenenler
       verileriCek()
       alert('Toplu yükleme tamamlandı!')
@@ -137,7 +144,7 @@ const duzenleModalAc = (personel) => {
     id: personel.id, 
     fullName: personel.fullName, 
     email: personel.email, 
-    role: personel.roles[0], 
+    role: personel.roleLevel || personel.roles[0], 
     districtId: personel.districtId || '',     
     institutionId: personel.institutionId || '', 
     newPassword: '' 
@@ -146,7 +153,7 @@ const duzenleModalAc = (personel) => {
 
 const personelGuncelle = async () => {
   try {
-    await axios.put(`http://localhost:3000/api/admin/update-user/${seciliPersonel.value.id}`, {
+    await api.put(`/admin/update-user/${seciliPersonel.value.id}`, {
       ...seciliPersonel.value,
       password: seciliPersonel.value.newPassword
     })
@@ -154,13 +161,13 @@ const personelGuncelle = async () => {
     verileriCek()
   } catch (err) { alert('Güncelleme başarısız oldu.') }
 }
-// Personeli Komple Silme
+
 const personelSil = async (id) => {
   if (!confirm('⚠️ DİKKAT: Bu personeli tamamen silmek istediğinize emin misiniz? Bu işlem geri alınamaz!')) return
   try {
-    await axios.delete(`http://localhost:3000/api/admin/user/${id}`)
-    seciliPersonel.value = null // Modalı kapat
-    verileriCek() // Tabloyu yenile
+    await api.delete(`/admin/user/${id}`)
+    seciliPersonel.value = null 
+    verileriCek() 
     alert('Personel sistemden başarıyla silindi.')
   } catch (err) { 
     alert('Silme işlemi başarısız oldu. Personelin üzerinde aktif görevler olabilir.') 
@@ -312,7 +319,7 @@ const personelSil = async (id) => {
               <td>{{ p.fullName }}</td>
               <td>{{ p.username }}</td>
               <td>{{ p.institution?.name || 'Atanmadı' }} ({{ p.district?.name || '-' }})</td>
-              <td><span class="badge">{{ p.roles[0] }}</span></td>
+              <td><span class="badge">{{ p.roleLevel || p.roles[0] }}</span></td>
               <td>
                 <button class="btn-mor" style="padding: 6px 12px; width: auto;" @click="duzenleModalAc(p)">
                   Düzenle
@@ -339,10 +346,10 @@ const personelSil = async (id) => {
         <label class="modal-label">Rol / Yetki Seçimi:</label>
         <select v-model="seciliPersonel.role" class="input-kutu">
           <option value="PERSONEL">Standart Personel (Öğretmen)</option>
-          <option value="KURUM_EM">Kurum Eğitim Mesulü</option>
-          <option v-if="isAdmin || isBolgeEM" value="MINTIKA_EM">Mıntıka Eğitim Mesulü</option>
-          <option v-if="isAdmin" value="BOLGE_EM">Bölge Eğitim Mesulü</option>
-          <option v-if="isAdmin" value="ADMIN">Sistem Yöneticisi</option>
+          <option value="KURUM">Kurum Eğitim Mesulü</option>
+          <option v-if="isAdmin || isBolgeEM" value="MINTIKA">Mıntıka Eğitim Mesulü</option>
+          <option v-if="isAdmin" value="BOLGE">Bölge Eğitim Mesulü</option>
+          <option v-if="isAdmin" value="SISTEM">Sistem Yöneticisi</option>
         </select>
 
         <label class="modal-label">1. Transfer Edilecek Mıntıka:</label>

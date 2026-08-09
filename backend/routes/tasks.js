@@ -3,166 +3,243 @@ const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-router.post('/auto-create', async (req, res) => {
-  try {
-    const { title, month, week, institutionId, senderId, moduleType } = req.body;
-    const newTask = await prisma.task.create({
-      data: {
-        title, moduleType, isAutoTracked: true,
-        month: parseInt(month), week: parseInt(week), 
-        institutionId: institutionId || null, senderId
-      }
-    });
-    res.json(newTask);
-  } catch (error) { res.status(500).json({ error: 'Görev oluşturulamadı.' }); }
-});
+// GÜVENLİK KALKANLARI
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
 
-// 🚀 AKILLI VE GERİYE DÖNÜK İLERLEME HESAPLAYICI (TARİH VE MODÜL BAZLI)
-router.post('/calculate-progress', async (req, res) => {
-  try {
-    const { institutionId, userId, month, week, moduleType } = req.body;
-    
-    console.log(`\n⚙️ [MOTOR ÇALIŞTI] Modül: ${moduleType} | Ay: ${month} | Hafta: ${week} | Hoca: ${userId.substring(0,8)}...`);
+router.use(authenticate);
 
-    if (!moduleType) return res.json({ message: "Modül tipi belirtilmemiş!" });
-
-    const task = await prisma.task.findFirst({
-      where: { institutionId, month: parseInt(month), week: parseInt(week), moduleType }
-    });
-    
-    if (!task) {
-      console.log("❌ Bu aya ve haftaya ait aktif görev bulunamadı.");
-      return res.json({ message: "Görev yok." });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId }, include: { managedClasses: true }
-    });
-    const classIds = user?.managedClasses.map(c => c.id) || [];
-    
-    const totalStudents = await prisma.student.count({
-      where: { institutionId, classGroupId: { in: classIds } }
-    });
-
-    if (['YOKLAMA', 'PERFORMANS', 'KITAP'].includes(moduleType) && totalStudents === 0) {
-      console.log("❌ Hocanın sınıfında kayıtlı talebe yok, hesaplama iptal.");
-      return res.json({ message: "Hocanın talebesi yok." });
-    }
-
-    let expectedCount = 0;
-    let completedCount = 0;
-
-    // --- ZAMAN MAKİNESİ (Tarih Aralığını Bul) ---
-    const yil = new Date().getFullYear();
-    const ayIndex = parseInt(month) - 1;
-    const haftaStartGun = ((parseInt(week) - 1) * 7) + 1;
-    let haftaEndGun = parseInt(week) * 7;
-    
-    const ayinSonGunu = new Date(yil, ayIndex + 1, 0).getDate();
-    if (haftaEndGun > ayinSonGunu) haftaEndGun = ayinSonGunu;
-
-    const startDate = new Date(yil, ayIndex, haftaStartGun);
-    const endDate = new Date(yil, ayIndex, haftaEndGun, 23, 59, 59);
-
-    // 1. YOKLAMA MODÜLÜ (Öğrenci Başı 5 Gün)
-    if (moduleType === 'YOKLAMA') {
-      expectedCount = totalStudents * 5; 
-      const attendances = await prisma.attendance.findMany({
-        where: { student: { classGroupId: { in: classIds } }, date: { gte: startDate, lte: endDate } }
-      });
-      completedCount = attendances.length;
-    } 
-    // 2. PERFORMANS MODÜLÜ (Öğrenci Başı 5 Ders)
-    else if (moduleType === 'PERFORMANS') {
-      expectedCount = totalStudents * 5; 
-      const grades = await prisma.performanceGrade.findMany({
-        where: { student: { classGroupId: { in: classIds } }, weekStartDate: { gte: startDate, lte: endDate } }
-      });
-      completedCount = grades.length;
-    }
-   // 3. KİTAP TAKİBİ MODÜLÜ (Öğrenci Başı Aylık Etkileşim)
-    else if (moduleType === 'KITAP') {
-      expectedCount = totalStudents; 
-      
-      // Kitap hesaplamasını ilgili AY için yapıyoruz (O ayın 1'i ile son günü arası)
-      const startOfMonth = new Date(Date.UTC(yil, ayIndex, 1, 0, 0, 0));
-      const endOfMonth = new Date(Date.UTC(yil, ayIndex + 1, 0, 23, 59, 59));
-      
-      // Veritabanına soruyoruz: "Bu ay içinde 'logs' (okuma geçmişi) atılmış ve okuduğu sayfa 0'dan büyük olan talebeleri getir"
-      const activeTrackings = await prisma.studentBookTracking.findMany({
-        where: { 
-          student: { classGroupId: { in: classIds } }, 
-          readPages: { gt: 0 },
-          // targetMonth yerine Prisma'daki gerçek tarih ilişkisini kullanıyoruz:
-          logs: {
-            some: {
-              date: { gte: startOfMonth, lte: endOfMonth }
-            }
-          }
-        }
-      });
-
-      // Aynı çocuk o ay 5 kere kitap okuduysa bile 1 kere say (Benzersiz Öğrenci)
-      const uniqueStudents = new Set(activeTrackings.map(bt => bt.studentId));
-      completedCount = uniqueStudents.size;
-    }
-    // 4. MÜFREDAT MODÜLÜ (O tarihe kadar işlenmesi gereken konular)
-    else if (moduleType === 'MUFREDAT') {
-      const activeTopics = await prisma.curriculumTopic.findMany({
-        where: { subject: { institutionId }, endDate: { lte: endDate } }
-      });
-      expectedCount = activeTopics.length * classIds.length; // Hedef: Tüm konular * Hocanın sınıfları
-      
-      if (expectedCount > 0) {
-        completedCount = await prisma.topicProgress.count({
-          where: { topicId: { in: activeTopics.map(t => t.id) }, classGroupId: { in: classIds }, status: "ISLENDI" }
-        });
-      }
-    }
-
-    // Yüzdeyi Güvenli Şekilde Hesapla ve Kaydet
-    let percentage = expectedCount > 0 ? (completedCount / expectedCount) * 100 : 0;
-    if (percentage > 100) percentage = 100;
-
-    let progressRecord = await prisma.taskProgress.findFirst({
-      where: { taskId: task.id, userId: userId }
-    });
-
-    if (progressRecord) {
-      progressRecord = await prisma.taskProgress.update({
-        where: { id: progressRecord.id },
-        data: { completedCount, totalExpected: expectedCount, percentage }
-      });
-    } else {
-      progressRecord = await prisma.taskProgress.create({
-        data: { taskId: task.id, userId, institutionId, completedCount, totalExpected: expectedCount, percentage }
-      });
-    }
-
-    res.json(progressRecord);
-  } catch (error) { 
-    console.error("HESAPLAMA HATASI:", error);
-    res.status(500).json({ error: 'Hesaplama hatası.' }); 
-  }
-});
-
+// ==========================================
+// 1. KURUMLARA ÖZEL GÖREVLERİ GETİR (EKSİK OLAN 404 ROTASI DÜZELTİLDİ)
+// ==========================================
 router.get('/institution/:institutionId', async (req, res) => {
   try {
     const { institutionId } = req.params;
+
     const tasks = await prisma.task.findMany({
       where: { institutionId },
-      orderBy: { createdAt: 'desc' },
-      include: { progressRecords: true, sender: { select: { fullName: true } } }
+      include: { progressRecords: true },
+      orderBy: { createdAt: 'desc' }
     });
 
-    for (let task of tasks) {
-      for (let record of task.progressRecords) {
-        const user = await prisma.user.findUnique({ where: { id: record.userId }, select: { fullName: true } });
-        record.userFullName = user ? user.fullName : "Bilinmeyen Personel";
-      }
+    // TaskProgress modelinde User ilişkisi tanımlı olmadığı için isimleri manuel eşliyoruz
+    const userIds = [...new Set(tasks.flatMap(t => t.progressRecords.map(pr => pr.userId)))];
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, fullName: true }
+    });
+    
+    const userMap = users.reduce((acc, user) => {
+      acc[user.id] = user.fullName;
+      return acc;
+    }, {});
+
+    const formattedTasks = tasks.map(task => ({
+      ...task,
+      progressRecords: task.progressRecords.map(pr => ({
+        ...pr,
+        userFullName: userMap[pr.userId] || 'Bilinmeyen Personel'
+      }))
+    }));
+
+    res.json(formattedTasks);
+  } catch (error) {
+    console.error("Kurum görevleri getirme hatası:", error);
+    res.status(500).json({ error: 'Görevler getirilemedi.' });
+  }
+});
+
+// ==========================================
+// 2. OTOMATİK GÖREV OLUŞTURMA (EKSİK OLAN 404 ROTASI DÜZELTİLDİ)
+// ==========================================
+router.post('/auto-create', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+  try {
+    const { title, moduleType, month, week, institutionId, senderId } = req.body;
+
+    // Görev daha önce oluşturulmuş mu kontrol et
+    let task = await prisma.task.findFirst({
+      where: { institutionId, moduleType, month, week }
+    });
+
+    if (!task) {
+      task = await prisma.task.create({
+        data: {
+          title,
+          moduleType,
+          month,
+          week,
+          institutionId,
+          senderId,
+          status: 'ISLEMDE',
+          isAutoTracked: true
+        }
+      });
     }
-    res.json(tasks);
-  } catch (error) { res.status(500).json({ error: 'Görevler getirilemedi.' }); }
+
+    res.json(task);
+  } catch (error) {
+    console.error("Otomatik görev oluşturma hatası:", error);
+    res.status(500).json({ error: 'Görev oluşturulamadı.' });
+  }
+});
+
+// ==========================================
+// 3. İLERLEME HESAPLA (YENİ ŞEMAYA GÖRE TAMAMEN YENİLENEN MOTOR)
+// ==========================================
+router.post('/calculate-progress', async (req, res) => {
+  try {
+    const { institutionId, userId, month, week, moduleType } = req.body;
+
+    // 1. Görevi bul
+    const task = await prisma.task.findFirst({
+      where: { institutionId, month, week, moduleType }
+    });
+    if (!task) return res.json({ message: "İlgili ay/hafta için atanmış görev bulunamadı." });
+
+    // 2. Hocanın yetkili olduğu sınıfları bul
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { managedClassIds: true }
+    });
+    
+    if (!user || !user.managedClassIds || user.managedClassIds.length === 0) {
+       return res.json({ message: "Personelin sorumlu olduğu sınıf yok." });
+    }
+
+    // 3. O sınıflardaki aktif öğrencileri bul
+    const students = await prisma.student.findMany({
+      where: { 
+        institutionId, 
+        classId: { in: user.managedClassIds },
+        status: 'AKTIF'
+      },
+      select: { id: true }
+    });
+
+    const totalExpected = students.length;
+    let completedCount = 0;
+
+    // 4. Öğrenciler varsa Yoklama için sayım yap
+    if (totalExpected > 0) {
+      const studentIds = students.map(s => s.id);
+      
+      if (moduleType === 'YOKLAMA') {
+        // Personelin sınıflarındaki öğrencilerden kaç tanesine yoklama girilmiş sayar
+        const attendances = await prisma.attendance.groupBy({
+          by: ['studentId'],
+          where: { studentId: { in: studentIds } }
+        });
+        completedCount = attendances.length;
+      } 
+    }
+
+    const percentage = totalExpected > 0 ? (completedCount / totalExpected) * 100 : 0;
+
+    // 5. TaskProgress kaydını oluştur veya güncelle
+    let progress = await prisma.taskProgress.findFirst({
+      where: { taskId: task.id, userId }
+    });
+
+    if (progress) {
+      progress = await prisma.taskProgress.update({
+        where: { id: progress.id },
+        data: { totalExpected, completedCount, percentage }
+      });
+    } else {
+      progress = await prisma.taskProgress.create({
+        data: {
+          taskId: task.id,
+          userId,
+          institutionId,
+          totalExpected,
+          completedCount,
+          percentage
+        }
+      });
+    }
+
+    // Ana görev tablosunu yüzdelik ile ortalama olarak güncelle
+    const allProgresses = await prisma.taskProgress.findMany({ where: { taskId: task.id }});
+    const avgProgress = allProgresses.length > 0 
+      ? Math.round(allProgresses.reduce((sum, p) => sum + p.percentage, 0) / allProgresses.length) 
+      : 0;
+
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { progress: avgProgress }
+    });
+
+    res.json(progress);
+  } catch (error) {
+    console.error("Hesaplama hatası:", error);
+    res.status(500).json({ error: 'İlerleme hesaplanamadı.' });
+  }
+});
+
+// ==========================================
+// 4. GÖREV SİLME
+// ==========================================
+router.delete('/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const task = await prisma.task.findUnique({ where: { id } });
+    if (!task) return res.status(404).json({ error: 'Görev bulunamadı.' });
+
+    // Sadece görevi gönderen kişi veya Sistem Admini silebilir
+    if (task.senderId !== req.user.id && req.user.roleLevel !== 'SISTEM') {
+      return res.status(403).json({ error: 'Bu görevi silme yetkiniz yok.' });
+    }
+
+    await prisma.taskProgress.deleteMany({ where: { taskId: id } });
+    await prisma.task.delete({ where: { id } });
+
+    // 📝 AUDIT LOG YAZILIYOR
+    await prisma.auditLog.create({
+      data: { userId: req.user.id, action: 'DELETE', targetType: 'Task', targetId: id, before: JSON.stringify(task) }
+    });
+
+    res.json({ message: 'Görev başarıyla silindi.' });
+  } catch (error) {
+    console.error("Görev silme hatası:", error);
+    res.status(500).json({ error: 'Görev silinemedi.' });
+  }
+});
+// ==========================================
+// 5. AKILLI ATAMA MOTORU (Dinamik Filtreleme)
+// ==========================================
+router.post('/assign-smart', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+  try {
+    const { taskId, institutionId, classId, roleLevel } = req.body;
+
+    // Filtreleme kriterlerini belirle
+    let whereClause = {};
+    if (institutionId) whereClause.institutionId = institutionId;
+    if (classId) whereClause.managedClassIds = { has: classId };
+    if (roleLevel) whereClause.roleLevel = roleLevel;
+
+    // Hedef personelleri bul
+    const targetUsers = await prisma.user.findMany({ where: whereClause });
+
+    if (targetUsers.length === 0) {
+      return res.status(404).json({ error: 'Bu kriterlere uygun personel bulunamadı.' });
+    }
+
+    // Atamaları toplu oluştur
+    const assignments = await prisma.taskAssignment.createMany({
+      data: targetUsers.map(user => ({
+        taskId,
+        userId: user.id,
+        institutionId: user.institutionId,
+        classId: classId || null
+      }))
+    });
+
+    res.json({ message: `${targetUsers.length} personele görev başarıyla atandı.`, count: assignments.count });
+  } catch (error) {
+    console.error("Akıllı atama hatası:", error);
+    res.status(500).json({ error: 'Görev atanamadı.' });
+  }
 });
 
 module.exports = router;

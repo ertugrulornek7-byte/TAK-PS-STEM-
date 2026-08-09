@@ -5,103 +5,99 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-const JWT_SECRET = 'etut_takip_cok_gizli_anahtar_2026'; // Gerçekte .env içinde olmalı
+// Güvenlik: Şifreyi .env dosyasından alıyoruz, yoksa geçici bir anahtar kullanıyoruz
+const JWT_SECRET = process.env.JWT_SECRET || 'etut_takip_cok_gizli_anahtar_2026';
 
 // ==========================================
-// ALT MODÜL: GÜVENLİK VE GİRİŞ (AUTH)
+// 1. KULLANICI GİRİŞİ (LOGIN) - BİLET ÜRETİM MERKEZİ
 // ==========================================
-
-// 1. Kullanıcı Kaydı (Herkes PERSONEL Olarak Başlar!)
-router.post('/register', async (req, res) => {
-  try {
-    // Frontend'den districtId (Mıntıka ID) bilgisini de alıyoruz
-    const { username, password, fullName, districtId } = req.body;
-    
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    
-    // 7 Haneli Rastgele Personel Sicil ID'si Üret
-    const randomPersonelId = Math.floor(1000000 + Math.random() * 9000000).toString();
-
-    const user = await prisma.user.create({
-      data: {
-        personelId: randomPersonelId, 
-        username,
-        password: hashedPassword,
-        fullName,
-        roles: ["PERSONEL"], // KURAL: HERKES PERSONEL BAŞLAR!
-        districtId: districtId || null // YENİ: Personelin bağlı olduğu mıntıka
-      }
-    });
-
-    res.json({ message: "Kayıt başarılı", userId: user.id });
-  } catch (error) {
-    console.error("💥 KAYIT HATASI DETAYI:", error); 
-    res.status(500).json({ error: `Sistem Hatası: ${error.message}` }); 
-  }
-});
-
-// 2. Kullanıcı Girişi (Login) ve SİHİRLİ ADMİN ARKA KAPISI
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    // 🔥 SİHİRLİ ADMİN YARATICISI 🔥
-    if (username === 'admin' && password === '18881959') {
-      let superAdmin = await prisma.user.findUnique({ where: { username: 'admin' } });
-      
-      // Eğer veritabanında admin yoksa, hemen en üst yetkiyle oluştur!
-      if (!superAdmin) {
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash('18881959', salt);
-        superAdmin = await prisma.user.create({
-          data: {
-            personelId: "0000000",
-            username: "admin",
-            password: hashedPassword,
-            fullName: "Sistem Yöneticisi",
-            roles: ["ADMIN"], // 👑 KRAL YETKİSİ
-            districtId: null
-          }
-        });
-        console.log("👑 Süper Admin hesabı otomatik oluşturuldu!");
+    // Kullanıcıyı veritabanında bul
+    const user = await prisma.user.findUnique({
+      where: { username },
+      include: {
+        district: true,
+        institution: true
       }
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
     }
 
-    const user = await prisma.user.findUnique({ 
-      where: { username },
-      include: { institution: true, district: true } 
-    });
-    
-    if (!user) return res.status(401).json({ error: 'Kullanıcı bulunamadı.' });
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) return res.status(401).json({ error: 'Hatalı şifre!' });
+    // Şifre kontrolü
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Kullanıcı adı veya şifre hatalı.' });
+    }
 
+    // JWT Token Üretimi (24 Saatlik Geçerli Bilet)
     const token = jwt.sign(
       { 
         id: user.id, 
-        roles: user.roles, 
-        institutionId: user.institutionId, 
-        districtId: user.districtId,
-        fullName: user.fullName 
-      }, 
-      JWT_SECRET, 
-      { expiresIn: '24h' }
+        username: user.username, 
+        roleLevel: user.roleLevel // Yeni makam sistemimiz biletin içine işleniyor
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' } 
     );
 
-    res.json({ 
-      token, 
-      id: user.id, 
-      roles: user.roles, 
-      fullName: user.fullName, 
-      personelId: user.personelId,
-      institutionId: user.institutionId,
-      districtId: user.districtId,
-      institutionName: user.institution ? user.institution.name : null
+    // Güvenlik: Şifreyi frontend'e (ön yüze) asla gönderme!
+    const { password: _, ...userWithoutPassword } = user;
+
+    res.json({
+      message: 'Giriş başarılı',
+      token,
+      user: userWithoutPassword
     });
+
   } catch (error) {
-    console.error("🚨 LOGIN HATASI DETAYI:", error); // Terminale detaylı hatayı yazdıracak
-    res.status(500).json({ error: 'Giriş işlemi başarısız: ' + error.message });
+    console.error("Login Hatası:", error);
+    res.status(500).json({ error: 'Sunucu hatası, giriş yapılamadı.' });
+  }
+});
+
+// ==========================================
+// 2. İLK KURULUM - KURUCU ADMİN OLUŞTURMA (Sihirli arka kapı yerine güvenli kurulum)
+// ==========================================
+router.post('/setup-admin', async (req, res) => {
+  try {
+    const { adminUsername, adminPassword, adminFullName } = req.body;
+
+    // Sistemde zaten SISTEM seviyesinde biri var mı kontrol et (Sadece 1 kez çalışmasına izin ver)
+    const existingAdmin = await prisma.user.findFirst({
+      where: { roleLevel: 'SISTEM' }
+    });
+
+    if (existingAdmin) {
+      return res.status(403).json({ error: 'Güvenlik kilidi: Sistem admini zaten mevcut. Bu işlem tekrarlanamaz.' });
+    }
+
+    if (!adminUsername || !adminPassword) {
+      return res.status(400).json({ error: 'Kullanıcı adı ve şifre zorunludur.' });
+    }
+
+    // Şifreyi kriptola (geri döndürülemez şekilde şifrele)
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(adminPassword, salt);
+
+    const newAdmin = await prisma.user.create({
+      data: {
+        username: adminUsername,
+        password: hashedPassword,
+        fullName: adminFullName || 'Sistem Yöneticisi',
+        roleLevel: 'SISTEM',
+        roles: ['ADMIN'] // Eski sistemle geriye dönük uyumluluk için
+      }
+    });
+
+    res.json({ message: 'Kurucu Sistem Admini başarıyla oluşturuldu!' });
+  } catch (error) {
+    console.error("Kurulum Hatası:", error);
+    res.status(500).json({ error: 'Admin hesabı oluşturulamadı.' });
   }
 });
 

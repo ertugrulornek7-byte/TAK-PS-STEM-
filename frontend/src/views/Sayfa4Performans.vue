@@ -1,11 +1,11 @@
 <script setup>
 import { ref, onMounted, watch, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
-import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
-import axios from 'axios'
+import { useAuthStore } from '../stores/authStore'
+import api from '../api/axios' // GÜVENLİ API MÜHRÜ EKLENDİ
 
 const etutStore = useEtutStore()
-const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
+const authStore = useAuthStore()
 const islemDurumu = ref('')
 
 const seciliAyDegeri = ref(new Date().toISOString().slice(0, 7))
@@ -15,7 +15,6 @@ const seciliHaftaIndeks = ref(0)
 const notlar = ref({}) 
 const iptalDersler = ref({ 1: false, 2: false, 3: false, 4: false, 5: false })
 
-// SENİN BELİRLEDİĞİ DERS İSİMLERİ (İleride Yönetici Panelinden Değiştirilebilir)
 const dersIsimleri = ['MATEMATİK', 'FEN', 'SOSYAL', 'İNGİLİZCE', 'TÜRKÇE']
 
 const bugunSifirlanmis = new Date()
@@ -66,12 +65,12 @@ const ayDegisti = () => {
 const haftalikVerileriCek = async () => {
   if (haftalar.value.length === 0) return
   const hafta = haftalar.value[seciliHaftaIndeks.value]
-  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  const kurumId = authStore.user?.institutionId 
 
   if (!kurumId) return
   
   try {
-    const res = await axios.get(`http://localhost:3000/api/performance/${kurumId}/${hafta.startDate}`)
+    const res = await api.get(`/performance/${kurumId}/${hafta.startDate}`)
     notlar.value = {}
     
     iptalDersler.value = { 1: false, 2: false, 3: false, 4: false, 5: false }
@@ -91,7 +90,6 @@ watch(seciliHaftaIndeks, () => {
   haftalikVerileriCek()
 })
 
-// İCMAL HESAPLAMA (BOŞ ile 0 FARKI DÜZELTİLDİ)
 const hesaplaIcmal = (studentId) => {
   let aktifDersSayisi = 0
   let toplamPuan = 0
@@ -115,7 +113,6 @@ const hesaplaIcmal = (studentId) => {
     }
   }
 
-  // YENİ MANTIK: Eğer öğretmenin henüz hiçbir dokunuşu (notu/izni) yoksa, 0 değil "null" (Boş) döndür!
   if (aktifDersSayisi === 0 || !islemGorduMu) return null
 
   let katsayi = 0
@@ -133,17 +130,15 @@ const hesaplaIcmal = (studentId) => {
 
   if (icmalPuan > 100) icmalPuan = 100
 
-  return icmalPuan // Tüm derslere izinsiz girmediyse buradan gerçek ve sert bir "0" çıkar.
+  return icmalPuan 
 }
 
-// SINIF ORTALAMASI (0 ALANLARI ACIMADAN HESABA KATAR)
 const sinifOrtalamasi = computed(() => {
   let toplamIcmal = 0
   let aktifOgrenciSayisi = 0
 
   etutStore.gosterilenTalebeler.forEach(t => {
     const icmal = hesaplaIcmal(t.id)
-    // YENİ MANTIK: Sadece "null" olmayanları (Yani işlem görenleri) hesaba kat. Sıfır (0) alan da hesaba girsin!
     if (icmal !== null) {
       toplamIcmal += icmal
       aktifOgrenciSayisi++
@@ -162,21 +157,20 @@ const notKaydet = async (studentId, subjectId) => {
 
   islemDurumu.value = 'Kaydediliyor...'
   try {
-    await axios.post('http://localhost:3000/api/performance', {
+    await api.post('/performance', {
       studentId,
       weekStartDate: hafta.startDate,
       subjectId,
-      score: parseInt(puan) // Veritabanına sayı olarak yolla
+      score: parseInt(puan) 
     })
     islemDurumu.value = 'Kaydedildi!'
     setTimeout(() => islemDurumu.value = '', 1000)
 
-    // 🔥 İŞTE BİZİM EFSANE MOTOR TETİKLEYİCİSİ BURAYA EKLENDİ! 🔥
     const islemTarihi = new Date(hafta.startDate);
     const ay = islemTarihi.getMonth() + 1;
     const haftaNo = Math.ceil(islemTarihi.getDate() / 7);
 
-    await axios.post('http://localhost:3000/api/tasks/calculate-progress', {
+    await api.post('/tasks/calculate-progress', {
       institutionId: authStore.user?.institutionId,
       userId: authStore.user?.id,
       month: ay,
@@ -194,7 +188,7 @@ const notKaydet = async (studentId, subjectId) => {
 
 const dersIptalEtToggle = async (subjectId) => {
   const hafta = haftalar.value[seciliHaftaIndeks.value]
-  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  const kurumId = authStore.user?.institutionId 
 
   if (!kurumId) {
     alert("Kurum kimliği bulunamadı, sayfayı yenileyin.")
@@ -205,9 +199,8 @@ const dersIptalEtToggle = async (subjectId) => {
   
   islemDurumu.value = 'Güncelleniyor...'
   try {
-    // 1. KENDİ NORMAL KAYDINI YAP (Buradan moduleType'ı sildik)
-    await axios.post('http://localhost:3000/api/performance/settings', {
-      institutionId: kurumId, // GÜVENLİ MÜHÜR
+    await api.post('/performance/settings', {
+      institutionId: kurumId, 
       weekStartDate: hafta.startDate,
       subjectId,
       isCancelled: iptalDersler.value[subjectId]
@@ -219,12 +212,11 @@ const dersIptalEtToggle = async (subjectId) => {
       haftalikVerileriCek()
     }
 
-    // 2. İŞTE BİZİM EFSANE MOTOR TETİKLEYİCİSİ BURAYA GELECEK!
     const islemTarihi = new Date(hafta.startDate);
     const ay = islemTarihi.getMonth() + 1;
     const haftaNo = Math.ceil(islemTarihi.getDate() / 7);
 
-    await axios.post('http://localhost:3000/api/tasks/calculate-progress', {
+    await api.post('/tasks/calculate-progress', {
       institutionId: authStore.user?.institutionId,
       userId: authStore.user?.id,
       month: ay,
@@ -353,7 +345,6 @@ const tarihGoster = (date) => `${date.getDate()}/${date.getMonth() + 1}`
 .etut-table th { background-color: #f8fafc; color: #334155; }
 .etut-table tr:hover { background-color: #f1f5f9; }
 
-/* DERS BAŞLIKLARI YATAY HALE GETİRİLDİ */
 .ders-baslik { text-align: center; min-width: 140px; }
 .ders-isim { font-weight: bold; display: block; margin-bottom: 8px; font-size: 1.05rem; letter-spacing: 0.5px; }
 .iptal-baslik { background-color: #fee2e2 !important; color: #b91c1c !important; }

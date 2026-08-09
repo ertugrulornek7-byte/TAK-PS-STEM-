@@ -2,7 +2,6 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/authStore'
-import axios from 'axios'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -10,7 +9,7 @@ const authStore = useAuthStore()
 const username = ref('')
 const password = ref('')
 const hataMesaji = ref('')
-const yukleniyor = ref(false)
+const yukleniyor = ref(false) // İŞTE EKSİK OLAN SATIR BU!
 
 const girisYap = async () => {
   if (!username.value || !password.value) {
@@ -18,36 +17,16 @@ const girisYap = async () => {
     return
   }
 
-  yukleniyor.value = true
   hataMesaji.value = ''
+  yukleniyor.value = true // Butonu pasif yap ve yazıyı değiştir
 
-  try {
-    const res = await axios.post('http://localhost:3000/api/auth/login', {
-      username: username.value,
-      password: password.value
-    })
-    // Gelen verileri Store'a kaydet (Eskisini bul ve bununla değiştir)
-    authStore.login(res.data.token, {
-      id: res.data.id,
-      fullName: res.data.fullName,
-      roles: res.data.roles, // BURASI DÜZELDİ! (Davet butonu artık görünecek)
-      personelId: res.data.personelId,
-      institutionId: res.data.institutionId,
-      institutionName: res.data.institutionName // Kurum adı eklendi
-    })
-    
+  const basarili = await authStore.login(username.value, password.value)
 
-    // Başarılıysa anasayfaya yönlendir
-    router.push('/')
-  } catch (error) {
-    if (error.response && error.response.data && error.response.data.error) {
-      hataMesaji.value = error.response.data.error
-    } else {
-      hataMesaji.value = 'Sunucuya bağlanılamadı!'
-    }
-  } finally {
-    yukleniyor.value = false
+  if (!basarili) {
+    hataMesaji.value = authStore.error || 'Giriş başarısız oldu.'
   }
+  
+  yukleniyor.value = false // İşlem bitince butonu eski haline getir
 }
 </script>
 

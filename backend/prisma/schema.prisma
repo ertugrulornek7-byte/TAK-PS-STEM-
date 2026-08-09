@@ -1,5 +1,3 @@
-// backend/prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,152 +8,19 @@ datasource db {
 }
 
 // ==========================================
-// MODÜL 1: HESAP, HİYERARŞİ VE GÖREV YÖNETİMİ
+// ENUMLAR (Veri Standartlaştırma)
 // ==========================================
-
-model User {
-  id            String   @id @default(uuid())
-  personelId    String?  @unique // YENİ EKLENEN: 7 Haneli Özel ID
-  username      String   @unique 
-  email         String?
-  password      String   
-  fullName      String   
-  roles         String[] @default(["PERSONEL"]) 
-  
-  districtId    String?
-  district      District? @relation("UserDistrict", fields: [districtId], references: [id])
-
-  // Personelin atandığı standart sınıf
-  classId       String?
-  class         Class?    @relation("UserClass", fields: [classId], references: [id])
-  
-  institutionId String?  
-  institution   Institution? @relation("InstitutionUsers", fields: [institutionId], references: [id])
-
-  managedInstitution Institution? @relation("InstitutionManager")
-  managedDistrict    District?    @relation("DistrictManager")
-  managedRegion      Region?      @relation("RegionManager")
-
-  // YENİ EKLENEN: Personelin YÖNETTİĞİ Sınıflar ve Seviyeler
-  managedClasses Class[]      @relation("UserClasses")
-  managedLevels  LevelGroup[] @relation("UserLevels")
-
-  sentRequests      ConnectionRequest[] @relation("SentRequests")
-  receivedRequests  ConnectionRequest[] @relation("ReceivedRequests")
-  inspections       Inspection[] 
-  sentTasks         Task[] @relation("SentTasks")
-  receivedTasks     Task[] @relation("ReceivedTasks")
-}
-
-model Institution {
-  id         String   @id @default(uuid())
-  name       String   // Kurum Adı
- 
-  // Hangi Mıntıkaya Bağlı?
-  districtId String?
-  district   District? @relation(fields: [districtId], references: [id])
-  
-  // Kurum Eğitim Mesulü Kim?
-  managerId  String?  @unique 
-  manager    User?    @relation("InstitutionManager", fields: [managerId], references: [id])
-  
-  // Kurumdaki Personeller
-  users      User[]   @relation("InstitutionUsers")
-  
-  // Kurumun Sınıfları ve Seviyeleri
-  classes    Class[]
-  levels     LevelGroup[] 
-  
-  // --- SİSTEM İÇİN KOPMAMASI GEREKEN KABLOLAR ---
-  students         Student[]
-  books            Book[]
-  inspections      Inspection[]
-  testBookTopics   TestBookTopic[]
-  mockExamSettings MockExamSetting[]
-  preExamSettings  PreExamSetting[]
-}
-
 enum RoleLevel {
+  PERSONEL
   KURUM
   MINTIKA
   BOLGE
   SISTEM
 }
 
-// ==========================================
-// YENİ MODÜL: SINIF VE SEVİYE GRUPLARI
-// ==========================================
-
-model Class {
-  id            String      @id @default(uuid())
-  name          String      // Örn: "9. Sınıf A Şubesi"
-  level         String      // Örn: "Lise", "Ortaokul"
-  
-  institutionId String
-  institution   Institution @relation(fields: [institutionId], references: [id])
-  
-  students      Student[]   // Sınıftaki Talebeler
-  users         User[]      @relation("UserClass")   // Sınıftaki Personeller
-  managers      User[]      @relation("UserClasses") // Sınıfı Yöneten Hocaefendiler
-}
-
-model LevelGroup {
-  id            String   @id @default(uuid())
-  name          String   // Örn: "Seviye 1", "Seviye 2"
-  
-  institutionId String
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-  
-  students      Student[]
-  managers      User[]   @relation("UserLevels") // Bu seviyeden sorumlu personeller
-}
-
-// ==========================================
-// MODÜL 2: ETÜT TAKİP DEFTERİ MODÜLÜ
-// ==========================================
-
-model Student {
-  id            String   @id @default(uuid())
-  institutionId String
-  studentCode   String   @unique
-  fullName      String
-  orderIndex    Int      // 1. Sayfa kuralı: Tüm sayfalardaki sıralama kilidi
-  status        StudentStatus @default(AKTIF)
-
-  institution   Institution @relation(fields: [institutionId], references: [id])
-  
-  // Talebenin Bağlı Olduğu Sınıf ve Seviye
-  classId       String?
-  class         Class?      @relation(fields: [classId], references: [id])
-  
-  levelGroupId  String?
-  levelGroup    LevelGroup? @relation(fields: [levelGroupId], references: [id])
-  
-  attendances    Attendance[]
-  bookTrackings  StudentBookTracking[]
-  performances   Performance[]
-  exams          Exam[]
-  questions      QuestionTracking[]
-  performanceGrades PerformanceGrade[]
-  preExamResults PreExamResult[]
-  mockExamResults MockExamResult[]
-  testBookResults TestBookResult[]
-}
-
 enum StudentStatus {
   AKTIF
   PASIF
-}
-
-// SAYFA 2: Yoklama
-model Attendance {
-  id          String   @id @default(uuid())
-  studentId   String
-  date        DateTime @db.Date
-  status      AttendanceStatus
-
-  student     Student  @relation(fields: [studentId], references: [id])
-  @@unique([studentId, date])
 }
 
 enum AttendanceStatus {
@@ -166,14 +31,178 @@ enum AttendanceStatus {
   GEC
 }
 
-// SAYFA 3: Kitap Okuma
+enum ExamType {
+  YAZILI
+  DENEME
+  KDU
+}
+
+enum QuestionType {
+  NORMAL
+  YENI_NESIL
+}
+
+enum TaskModuleType {
+  YOKLAMA
+  KITAP
+  MUFREDAT
+  PERFORMANS
+  YOY
+  DENEME
+  KDU
+  GENEL
+}
+
+enum TaskStatus {
+  BEKLIYOR
+  ISLEMDE
+  TAMAMLANDI
+  IPTAL
+}
+
+enum InspectionStatus {
+  BEKLIYOR
+  ISLEMDE
+  GIDERILDI
+}
+
+enum ConnectionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// ==========================================
+// MODÜLLER
+// ==========================================
+
+model User {
+  id            String   @id @default(uuid())
+  personelId    String?  @unique 
+  username      String   @unique 
+  email         String?
+  password      String   
+  fullName      String   
+  
+  roles         String[]  @default(["PERSONEL"]) 
+  roleLevel     RoleLevel @default(PERSONEL)
+  
+  districtId    String?
+  district      District? @relation("UserDistrict", fields: [districtId], references: [id])
+
+  classId       String?
+  class         Class?    @relation("UserClass", fields: [classId], references: [id], onDelete: SetNull)
+  
+  institutionId String?  
+  institution   Institution? @relation("InstitutionUsers", fields: [institutionId], references: [id], onDelete: Cascade)
+
+  managedInstitution Institution? @relation("InstitutionManager")
+  managedDistrict    District?    @relation("DistrictManager")
+  managedRegion      Region?      @relation("RegionManager")
+  managedClassIds    String[] 
+
+  sentRequests      ConnectionRequest[] @relation("SentRequests")
+  receivedRequests  ConnectionRequest[] @relation("ReceivedRequests")
+  inspections       Inspection[] 
+  
+  sentTasks         Task[] @relation("SentTasks")
+  
+  auditLogs         AuditLog[] 
+  assignments       TaskAssignment[]
+
+  @@index([institutionId])
+}
+
+model Institution {
+  id        String   @id @default(uuid())
+  name      String
+  nevi      String   @default("ORTAOKUL")
+
+  districtId String?
+  district   District? @relation(fields: [districtId], references: [id])
+  
+  managerId  String?  @unique 
+  manager    User?    @relation("InstitutionManager", fields: [managerId], references: [id], onDelete: SetNull)
+  
+  users      User[]   @relation("InstitutionUsers")
+  classes    Class[]
+  levels     LevelGroup[] 
+  
+  students         Student[]
+  books            Book[]
+  inspections      Inspection[]
+  testBookTopics   TestBookTopic[]
+  mockExamSettings MockExamSetting[]
+  preExamSettings  PreExamSetting[]
+}
+
+model Class {
+  id            String      @id @default(uuid())
+  name          String      
+  level         String      
+  
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  
+  users         User[]      @relation("UserClass")
+  @@index([institutionId])
+}
+
+model LevelGroup {
+  id            String   @id @default(uuid())
+  name          String   
+  
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  @@index([institutionId])
+}
+
+model Student {
+  id            String   @id @default(uuid())
+  institutionId String
+  studentCode   String   @unique
+  fullName      String
+  orderIndex    Int      
+  status        StudentStatus @default(AKTIF)
+
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  
+  classId       String?
+  levelGroupId  String?
+  
+  attendances   Attendance[]
+  bookTrackings StudentBookTracking[]
+  performances  Performance[]
+  exams         Exam[]
+  questions     QuestionTracking[]
+  performanceGrades PerformanceGrade[]
+  preExamResults PreExamResult[]
+  mockExamResults MockExamResult[]
+  testBookResults TestBookResult[]
+
+  @@index([institutionId])
+  @@index([classId])
+}
+
+model Attendance {
+  id          String   @id @default(uuid())
+  studentId   String
+  date        DateTime @db.Date
+  status      AttendanceStatus
+
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  
+  @@unique([studentId, date])
+  @@index([studentId, date])
+}
+
 model Book {
   id            String   @id @default(uuid())
   title         String
   totalPages    Int
-  institutionId String?  // Boşsa genel tavsiye, doluysa kurum kütüphanesi
+  institutionId String?  
   
-  institution   Institution? @relation(fields: [institutionId], references: [id])
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: Cascade)
   trackings     StudentBookTracking[]
 }
 
@@ -184,22 +213,29 @@ model StudentBookTracking {
   readPages   Int      @default(0)
   isCompleted Boolean  @default(false)
   logs        ReadingLog[]
-  student     Student  @relation(fields: [studentId], references: [id])
-  book        Book     @relation(fields: [bookId], references: [id])
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  book        Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
 }
 
-// SAYFA 4: Performans
+model ReadingLog {
+  id          String   @id @default(uuid())
+  trackingId  String   
+  pagesRead   Int      
+  date        DateTime @default(now())
+
+  tracking    StudentBookTracking @relation(fields: [trackingId], references: [id], onDelete: Cascade)
+}
+
 model Performance {
   id              String   @id @default(uuid())
   studentId       String
   weekStartDate   DateTime @db.Date
   branchName      String
-  score           Int      // 1 ile 5 arası
+  score           Int      
 
-  student         Student  @relation(fields: [studentId], references: [id])
+  student         Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
-// SAYFA 6, 7, 8: Sınav ve KDU Hedefleri
 model Exam {
   id          String   @id @default(uuid())
   studentId   String
@@ -211,16 +247,9 @@ model Exam {
   yoy2        Float?
   yoy3        Float?
 
-  student     Student  @relation(fields: [studentId], references: [id])
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
-enum ExamType {
-  YAZILI
-  DENEME
-  KDU
-}
-
-// SAYFA 9-13: Soru Takibi
 model QuestionTracking {
   id               String   @id @default(uuid())
   studentId        String
@@ -232,39 +261,17 @@ model QuestionTracking {
   incorrectAnswers Int
   netScore         Float?
 
-  student          Student  @relation(fields: [studentId], references: [id])
+  student          Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
-enum QuestionType {
-  NORMAL
-  YENI_NESIL
-}
-
-enum InspectionLevel {
-  ETUT_MESULU
-  MINTIKA_KOMISYONU
-  BOLGE_KOMISYONU
-}
-
-model ReadingLog {
-  id          String   @id @default(uuid())
-  trackingId  String   
-  pagesRead   Int      // O gün okunan sayfa
-  date        DateTime @default(now())
-
-  tracking    StudentBookTracking @relation(fields: [trackingId], references: [id], onDelete: Cascade)
-}
-
-// --- DERSHANE PERFORMANS MODÜLÜ ---
 model PerformanceGrade {
   id            String   @id @default(uuid())
   studentId     String
-  weekStartDate DateTime // O haftanın Pazartesi tarihi (Örn: 2026-03-02)
-  subjectId     Int      // Ders numarası (1, 2, 3, 4, 5)
-  score         Int      // Puan: 1, 2, 3, 4, 5. Girmediyse: 0
+  weekStartDate DateTime 
+  subjectId     Int      
+  score         Int      
   
   student       Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  
   @@unique([studentId, weekStartDate, subjectId])
 }
 
@@ -272,20 +279,17 @@ model WeeklyClassSetting {
   id            String   @id @default(uuid())
   institutionId String
   weekStartDate DateTime
-  subjectId     Int      // Ders numarası (1, 2, 3, 4, 5)
+  subjectId     Int      
   isCancelled   Boolean  @default(false)
 
   @@unique([institutionId, weekStartDate, subjectId])
 }
 
-// --- MÜFREDAT TAKİP MODÜLÜ (SAYFA 5) ---
 model CurriculumSubject {
   id            String   @id @default(uuid())
   name          String   
   institutionId String   
-  
   classId       String   @default("GENEL") 
-  
   topics        CurriculumTopic[]
 }
 
@@ -307,95 +311,77 @@ model TopicProgress {
   id            String   @id @default(uuid())
   topicId       String
   institutionId String   
-  
   classId       String   @default("GENEL") 
-  
-  status        String   @default("ISLENMEDI") 
+  status        String   @default("ISLENMEDI")
   completedAt   DateTime? 
   
   topic         CurriculumTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
-
   @@unique([topicId, institutionId, classId])
 }
 
-// --- YAZILI ÖNCESİ YAZILI (Y.Ö.Y) MODÜLÜ (SAYFA 6) ---
 model PreExamSetting {
   id            String   @id @default(uuid())
   institutionId String
-  
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-
   term          String
   subject       String
   practiceCount Int      @default(1)
 
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
   @@unique([institutionId, term, subject])
 }
 
 model PreExamResult {
   id             String   @id @default(uuid())
   studentId      String
-  term           String   // "1D1Y", "1D2Y"
-  subject        String   // "TÜRKÇE", "MATEMATİK"
-  targetScore    Int?     
-  actualScore    Int?     
-  
-  practiceScores String  @default("[]") 
+  term           String   
+  subject        String   
+  targetScore    Int?      
+  actualScore    Int?      
+  practiceScores String   @default("[]") 
 
   student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
   @@unique([studentId, term, subject])
 }
 
-// --- KDU VE DENEME SINAVLARI MODÜLÜ (SAYFA 8) ---
 model MockExamSetting {
   id            String   @id @default(uuid())
   institutionId String
-  
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-
   examType      String   
   count         Int      @default(1) 
 
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
   @@unique([institutionId, examType])
 }
 
 model MockExamResult {
   id            String   @id @default(uuid())
   studentId     String
-  examType      String   // "KDU" veya "DENEME"
-  examNumber    Int      // Sınav No (Örn: 1, 2, 3)
-  
+  examType      String   
+  examNumber    Int      
   turkce        Float?
   sosyal        Float?
   matematik     Float?
   ingilizce     Float?
   fen           Float?
   din           Float?
-  
-  score         Float?   // Puan (500 üzerinden)
+  score         Float?   
 
   student       Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
   @@unique([studentId, examType, examNumber])
 }
 
-// --- KİTAP VE TEST TAKİP MODÜLÜ (SAYFA 9) ---
 model TestBookTopic {
   id                  String   @id @default(uuid())
   institutionId       String   
-  
-  institution         Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-  
   subject             String   
   title               String   
   normalQuestionCount Int      @default(0) 
   yeniNesilCount      Int      @default(0) 
   orderIndex          Int      @default(0)
-
-  results             TestBookResult[]
   classId             String   @default("GENEL") 
 
+  institution         Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  results             TestBookResult[]
   @@unique([institutionId, subject, title])
 }
 
@@ -403,7 +389,6 @@ model TestBookResult {
   id              String   @id @default(uuid())
   studentId       String
   topicId         String
-
   normalDogru     Int?
   normalYanlis    Int?
   yeniNesilDogru  Int?
@@ -411,50 +396,41 @@ model TestBookResult {
 
   student         Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
   topic           TestBookTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
-
   @@unique([studentId, topicId])
 }
 
-// --- DENETİM MODÜLÜ (SAYFA 10) ---
 model Inspection {
   id             String   @id @default(uuid())
   institutionId  String   
   userId         String?  
-  
   inspectorRole  String   
   inspectorName  String   
   inspectionDate DateTime 
   remarks        String   @db.Text 
-  fixStatus      String   @default("BEKLIYOR") 
   
+  fixStatus      InspectionStatus @default(BEKLIYOR) 
   createdAt      DateTime @default(now())
 
   institution    Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
   user           User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// --- MINTIKA, BÖLGE VE DAVET SİSTEMİ ---
 model District {
-  id           String        @id @default(uuid())
-  name         String        // Mıntıka Adı
-  
-  regionId     String?
-  region       Region?       @relation(fields: [regionId], references: [id])
-  
-  managerId    String?       @unique 
-  manager      User?         @relation("DistrictManager", fields: [managerId], references: [id])
-  
-  institutions Institution[]
-  users        User[]        @relation("UserDistrict")
+  id            String        @id @default(uuid())
+  name          String        
+  regionId      String?
+  region        Region?       @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  managerId     String?       @unique 
+  manager       User?         @relation("DistrictManager", fields: [managerId], references: [id], onDelete: SetNull)
+  institutions  Institution[]
+  users         User[]        @relation("UserDistrict")
 }
 
 model Region {
   id        String     @id @default(uuid())
-  name      String     // Bölge Adı
-  
+  name      String     
   managerId String?    @unique 
-  manager   User?      @relation("RegionManager", fields: [managerId], references: [id])
-  
+  manager   User?      @relation("RegionManager", fields: [managerId], references: [id], onDelete: SetNull)
   districts District[]
 }
 
@@ -462,42 +438,39 @@ model ConnectionRequest {
   id          String   @id @default(uuid())
   senderId    String   
   receiverId  String   
-  
   targetType  String   
   targetId    String   
   
-  status      String   @default("PENDING") 
+  status      ConnectionStatus @default(PENDING) 
   createdAt   DateTime @default(now())
 
   sender      User     @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
   receiver    User     @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
 }
 
-// --- AKILLI GÖREV TAKİP SİSTEMİ ---
 model Task {
   id              String   @id @default(uuid())
   title           String   
   description     String?  @db.Text 
-  status          String   @default("BEKLIYOR") 
-  
-  moduleType      String?  
+  status          TaskStatus @default(BEKLIYOR)
+  moduleType      TaskModuleType?  
   isAutoTracked   Boolean  @default(false) 
   targetUrl       String?  
+  month           Int?     // Geri eklendi
+  week            Int?     // Geri eklendi
+  deadline        DateTime? 
   
-  month           Int?     
-  week            Int?     
   institutionId   String?  
-  
-  progress        Int      @default(0) 
-  
   senderId        String   
-  receiverId      String?  
-  createdAt       DateTime @default(now())
-
-  sender          User     @relation("SentTasks", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver        User?    @relation("ReceivedTasks", fields: [receiverId], references: [id], onDelete: Cascade)
-
+  
+  assignments     TaskAssignment[] 
+  proofs          TaskProof[]
   progressRecords TaskProgress[] 
+  
+  createdAt       DateTime @default(now())
+  sender          User     @relation("SentTasks", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([institutionId, month, week])
 }
 
 model TaskProgress {
@@ -510,4 +483,42 @@ model TaskProgress {
   percentage     Float    @default(0) 
   
   task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model TaskAssignment {
+  id            String   @id @default(uuid())
+  taskId        String
+  userId        String?  
+  classId       String?  
+  institutionId String?
+  
+  isCompleted   Boolean  @default(false)
+  completedAt   DateTime?
+
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model TaskProof {
+  id          String   @id @default(uuid())
+  taskId      String
+  userId      String
+  imageUrl    String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String   
+  targetType  String   
+  targetId    String   
+  before      String?  @db.Text 
+  after       String?  @db.Text 
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 }

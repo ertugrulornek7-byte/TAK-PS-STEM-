@@ -1,8 +1,8 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
 import { useAuthStore } from '../stores/authStore'
-import axios from 'axios'
+import api from '../api/axios' // GÜVENLİ API
 
 const etutStore = useEtutStore()
 const authStore = useAuthStore()
@@ -18,28 +18,89 @@ const komisyonSeciliSinif = ref('GENEL')
 const yeniKonu = ref({ title: '', normalSoru: 0, yeniNesilSoru: 0 })
 const sonuclar = ref({})
 
+// ==========================================
+// YENİ SİSTEM: SINIF FİLTRELEME VE GRUPLAMA MOTORU
+// ==========================================
+const ORTAOKUL_SINIFLARI = [
+  { id: '4_NEHARI', name: '4. Sınıf Nehari' },
+  { id: '5_SINIF', name: '5. Sınıf' },
+  { id: '6_SINIF', name: '6. Sınıf' },
+  { id: '7_SINIF', name: '7. Sınıf' },
+  { id: '8_SINIF', name: '8. Sınıf' }
+]
+
+const LISE_SINIFLARI = [
+  { id: '8_NEHARI', name: '8. Sınıf Nehari' },
+  { id: 'LISE_1', name: 'Lise 1' },
+  { id: 'LISE_2', name: 'Lise 2' },
+  { id: 'LISE_3', name: 'Lise 3' }
+]
+
+const tumSiniflar = [...ORTAOKUL_SINIFLARI, ...LISE_SINIFLARI]
+
+const sinifAdiniBul = (classId) => {
+  const sinif = tumSiniflar.find(s => s.id === classId)
+  return sinif ? sinif.name : 'Atanmamış / Bağımsız Talebeler'
+}
+
+const isPersonel = computed(() => authStore.user?.roleLevel === 'PERSONEL')
+const yetkiliSiniflar = computed(() => authStore.user?.managedClassIds || [])
+
+const aktifSinifFiltresi = ref('') // Yeni Lokal Filtremiz
+
+const izinVerilenTalebeler = computed(() => {
+  let talebeler = etutStore.gosterilenTalebeler || []
+  if (isPersonel.value) {
+    talebeler = talebeler.filter(t => yetkiliSiniflar.value.includes(t.classId))
+  }
+  return talebeler
+})
+
+const benzersizSinifIsimleri = computed(() => {
+  const siniflar = new Set()
+  izinVerilenTalebeler.value.forEach(t => {
+    if (t.classId) siniflar.add(t.classId)
+  })
+  return Array.from(siniflar).map(id => ({ id, name: sinifAdiniBul(id) }))
+})
+
+const gruplanmisTalebeler = computed(() => {
+  let talebeler = izinVerilenTalebeler.value
+  if (aktifSinifFiltresi.value) {
+    talebeler = talebeler.filter(t => t.classId === aktifSinifFiltresi.value)
+  }
+  const gruplar = {}
+  talebeler.forEach(t => {
+    const sinifAdi = sinifAdiniBul(t.classId)
+    if (!gruplar[sinifAdi]) gruplar[sinifAdi] = []
+    gruplar[sinifAdi].push(t)
+  })
+  return gruplar
+})
+// ==========================================
+
 onMounted(async () => {
-  await etutStore.gruplariGetir()
-  if (etutStore.talebler.length === 0) await etutStore.talebeleriGetir()
+  if (etutStore.gosterilenTalebeler.length === 0) await etutStore.talebeleriGetir()
   await verileriCek()
 })
 
 watch(seciliBrans, async () => { await verileriCek() })
-watch(() => etutStore.aktifSinifFiltresi, async () => { await verileriCek() })
+watch(aktifSinifFiltresi, async () => { await verileriCek() }) // Yeni filtreye bağlandı
 
 const verileriCek = async () => {
   const kurumId = authStore.user?.institutionId
   if (!kurumId) return
-  const sinifFiltresi = etutStore.aktifSinifFiltresi || 'GENEL'
+  const sinifFiltresi = aktifSinifFiltresi.value || 'GENEL'
 
   try {
-    const res = await axios.get(`http://localhost:3000/api/testbook/${kurumId}/${seciliBrans.value}/${sinifFiltresi}`)
+    const res = await api.get(`/testbook/${kurumId}/${seciliBrans.value}/${sinifFiltresi}`)
     konular.value = res.data
     sonuclar.value = {}
     
     konular.value.forEach(konu => {
       if (acikKonular.value[konu.id] === undefined) acikKonular.value[konu.id] = false
-      etutStore.talebler.forEach(t => { sonuclar.value[`${t.id}-${konu.id}`] = { nD: '', nY: '', yD: '', yY: '' } })
+      etutStore.gosterilenTalebeler.forEach(t => { sonuclar.value[`${t.id}-${konu.id}`] = { nD: '', nY: '', yD: '', yY: '' } })
+      
       konu.results.forEach(r => {
         sonuclar.value[`${r.studentId}-${konu.id}`] = {
           nD: r.normalDogru !== null ? r.normalDogru : '', nY: r.normalYanlis !== null ? r.normalYanlis : '',
@@ -57,14 +118,14 @@ const konuEkle = async () => {
 
   islemDurumu.value = 'Ekleniyor...'
   try {
-    await axios.post('http://localhost:3000/api/testbook/topic', {
+    await api.post('/testbook/topic', {
       institutionId: kurumId,
       subject: seciliBrans.value,
       title: yeniKonu.value.title,
       normalQuestionCount: parseInt(yeniKonu.value.normalSoru) || 0,
       yeniNesilCount: parseInt(yeniKonu.value.yeniNesilSoru) || 0,
       orderIndex: konular.value.length + 1,
-      classGroupId: komisyonSeciliSinif.value
+      classId: komisyonSeciliSinif.value // Schema ile eşleşen alan (classId)
     })
     yeniKonu.value = { title: '', normalSoru: 0, yeniNesilSoru: 0 }
     islemDurumu.value = 'Eklendi!'; setTimeout(() => islemDurumu.value = '', 1500)
@@ -78,8 +139,9 @@ const sonucKaydet = async (studentId, topicId) => {
 
   islemDurumu.value = 'Kaydediliyor...'
   try {
-    await axios.post('http://localhost:3000/api/testbook/result', {
-      studentId, topicId, normalDogru: clean(v.nD), normalYanlis: clean(v.nY),
+    await api.post('/testbook/result', {
+      studentId, topicId, 
+      normalDogru: clean(v.nD), normalYanlis: clean(v.nY),
       yeniNesilDogru: clean(v.yD), yeniNesilYanlis: clean(v.yY)
     })
     islemDurumu.value = 'Kaydedildi!'; setTimeout(() => islemDurumu.value = '', 1000)
@@ -113,14 +175,14 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
         </div>
       </div>
       <div class="filtre-secici">
-        <select v-model="etutStore.aktifSinifFiltresi" class="input-text vurgulu-secim">
+        <select v-model="aktifSinifFiltresi" class="input-text vurgulu-secim">
           <option value="">-- Tüm Sınıfların Ortak Kitapları --</option>
-          <option v-for="sinif in etutStore.siniflar" :key="sinif.id" :value="sinif.id">{{ sinif.name }} Testleri</option>
+          <option v-for="sinif in benzersizSinifIsimleri" :key="sinif.id" :value="sinif.id">Sadece {{ sinif.name }} Testleri</option>
         </select>
       </div>
     </div>
 
-    <h2>Sayfa 9 - Kitap / Test Takibi (Workwin)</h2>
+    <h2>Sayfa 9 - Kitap / Test Takibi</h2>
 
     <div class="filtre-paneli">
       <div class="filtre-grup">
@@ -132,14 +194,14 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
       <div v-if="islemDurumu" class="toast">{{ islemDurumu }}</div>
     </div>
 
-    <div class="komisyon-paneli" v-if="authStore.user?.roles?.includes('KURUM_EM') || authStore.user?.roles?.includes('BOLGE_EM')">
+    <div class="komisyon-paneli" v-if="authStore.user?.roleLevel === 'KURUM' || authStore.user?.roleLevel === 'MINTIKA' || authStore.user?.roleLevel === 'BOLGE' || authStore.user?.roleLevel === 'SISTEM'">
       <h3>👑 Komisyon - Sınıfa Özel Test/Konu Ekleme</h3>
       
       <div class="form-grup ufak" style="margin-bottom: 10px;">
          <label style="font-weight: bold; color: #475569;">Bu test hangi sınıf için eklenecek?</label>
          <select v-model="komisyonSeciliSinif" class="select-kutu w-kucuk" style="width: 200px;">
             <option value="GENEL">Tüm Sınıflar İçin Ortak</option>
-            <option v-for="sinif in etutStore.siniflar" :key="sinif.id" :value="sinif.id">Sadece {{ sinif.name }} İçin</option>
+            <option v-for="sinif in tumSiniflar" :key="sinif.id" :value="sinif.id">Sadece {{ sinif.name }} İçin</option>
          </select>
       </div>
 
@@ -158,8 +220,8 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
     </div>
 
     <div class="ogretmen-paneli">
-      <p class="aciklama" v-if="etutStore.aktifSinifFiltresi">Şu an <strong>seçili sınıfın</strong> test konularını görüyorsunuz.</p>
-      <p class="aciklama" style="color: #b91c1c; font-weight: bold;" v-else>Lütfen yukarıdan sonuç gireceğiniz sınıfı seçin!</p>
+      <p class="aciklama" v-if="aktifSinifFiltresi">Şu an <strong>seçili sınıfın</strong> test konularını görüyorsunuz.</p>
+      <p class="aciklama" style="color: #b91c1c; font-weight: bold;" v-else>Sonuç girmek için lütfen yukarıdan spesifik bir sınıf seçin!</p>
 
       <div v-if="konular.length === 0" class="uyari-mesaj">Bu branş/sınıf eşleşmesi için henüz test konusu eklenmemiş.</div>
 
@@ -170,46 +232,54 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
         </div>
 
         <div class="ders-icerik" v-if="acikKonular[konu.id]">
-          <table class="etut-table">
-            <thead>
-              <tr>
-                <th rowspan="2" style="width: 50px;">Sıra</th>
-                <th rowspan="2" style="width: 200px;">Talebe Adı Soyadı</th>
-                <th colspan="5" class="normal-baslik" v-if="konu.normalQuestionCount > 0">Normal Test</th>
-                <th colspan="5" class="yeni-baslik" v-if="konu.yeniNesilCount > 0">Yeni Nesil Test</th>
-              </tr>
-              <tr>
-                <template v-if="konu.normalQuestionCount > 0">
-                  <th class="alt-baslik">S.A</th><th class="alt-baslik">D</th><th class="alt-baslik">Y</th><th class="alt-baslik">NET</th><th class="alt-baslik">%</th>
-                </template>
-                <template v-if="konu.yeniNesilCount > 0">
-                  <th class="alt-baslik">S.A</th><th class="alt-baslik">D</th><th class="alt-baslik">Y</th><th class="alt-baslik">NET</th><th class="alt-baslik">%</th>
-                </template>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="talebe in etutStore.gosterilenTalebeler" :key="talebe.id">
-                <td><strong>{{ talebe.dinamikSira }}</strong></td>
-                <td><strong>{{ talebe.fullName }}</strong></td>
-                
-                <template v-if="konu.normalQuestionCount > 0">
-                  <td class="sabit-deger">{{ konu.normalQuestionCount }}</td>
-                  <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].nD" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input" :disabled="!etutStore.aktifSinifFiltresi" /></td>
-                  <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].nY" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input" :disabled="!etutStore.aktifSinifFiltresi" /></td>
-                  <td class="hesap-hucre net-renk"><strong>{{ hesaplaNet(sonuclar[`${talebe.id}-${konu.id}`].nD, sonuclar[`${talebe.id}-${konu.id}`].nY) }}</strong></td>
-                  <td class="hesap-hucre basari-renk"><strong>{{ hesaplaBasari(sonuclar[`${talebe.id}-${konu.id}`].nD, sonuclar[`${talebe.id}-${konu.id}`].nY, konu.normalQuestionCount) }}</strong></td>
-                </template>
+          
+          <div v-for="(ogrenciler, sinifAdi) in gruplanmisTalebeler" :key="sinifAdi" class="sinif-bloku">
+            <div class="sinif-basligi">
+              <span>📖 {{ sinifAdi }}</span>
+              <span class="sinif-mevcudu">{{ ogrenciler.length }} Talebe</span>
+            </div>
 
-                <template v-if="konu.yeniNesilCount > 0">
-                  <td class="sabit-deger">{{ konu.yeniNesilCount }}</td>
-                  <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].yD" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input y-nesil" :disabled="!etutStore.aktifSinifFiltresi" /></td>
-                  <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].yY" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input y-nesil" :disabled="!etutStore.aktifSinifFiltresi" /></td>
-                  <td class="hesap-hucre net-renk"><strong>{{ hesaplaNet(sonuclar[`${talebe.id}-${konu.id}`].yD, sonuclar[`${talebe.id}-${konu.id}`].yY) }}</strong></td>
-                  <td class="hesap-hucre basari-renk"><strong>{{ hesaplaBasari(sonuclar[`${talebe.id}-${konu.id}`].yD, sonuclar[`${talebe.id}-${konu.id}`].yY, konu.yeniNesilCount) }}</strong></td>
-                </template>
-              </tr>
-            </tbody>
-          </table>
+            <table class="etut-table">
+              <thead>
+                <tr>
+                  <th rowspan="2" style="width: 50px;">Sıra</th>
+                  <th rowspan="2" style="width: 200px;">Talebe Adı Soyadı</th>
+                  <th colspan="5" class="normal-baslik" v-if="konu.normalQuestionCount > 0">Normal Test</th>
+                  <th colspan="5" class="yeni-baslik" v-if="konu.yeniNesilCount > 0">Yeni Nesil Test</th>
+                </tr>
+                <tr>
+                  <template v-if="konu.normalQuestionCount > 0">
+                    <th class="alt-baslik">S.A</th><th class="alt-baslik">D</th><th class="alt-baslik">Y</th><th class="alt-baslik">NET</th><th class="alt-baslik">%</th>
+                  </template>
+                  <template v-if="konu.yeniNesilCount > 0">
+                    <th class="alt-baslik">S.A</th><th class="alt-baslik">D</th><th class="alt-baslik">Y</th><th class="alt-baslik">NET</th><th class="alt-baslik">%</th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="talebe in ogrenciler" :key="talebe.id">
+                  <td><strong>{{ talebe.orderIndex }}</strong></td>
+                  <td><strong>{{ talebe.fullName }}</strong></td>
+                  
+                  <template v-if="konu.normalQuestionCount > 0">
+                    <td class="sabit-deger">{{ konu.normalQuestionCount }}</td>
+                    <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].nD" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input" :disabled="!aktifSinifFiltresi" /></td>
+                    <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].nY" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input" :disabled="!aktifSinifFiltresi" /></td>
+                    <td class="hesap-hucre net-renk"><strong>{{ hesaplaNet(sonuclar[`${talebe.id}-${konu.id}`].nD, sonuclar[`${talebe.id}-${konu.id}`].nY) }}</strong></td>
+                    <td class="hesap-hucre basari-renk"><strong>{{ hesaplaBasari(sonuclar[`${talebe.id}-${konu.id}`].nD, sonuclar[`${talebe.id}-${konu.id}`].nY, konu.normalQuestionCount) }}</strong></td>
+                  </template>
+
+                  <template v-if="konu.yeniNesilCount > 0">
+                    <td class="sabit-deger">{{ konu.yeniNesilCount }}</td>
+                    <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].yD" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input y-nesil" :disabled="!aktifSinifFiltresi" /></td>
+                    <td><input type="number" v-model="sonuclar[`${talebe.id}-${konu.id}`].yY" @blur="sonucKaydet(talebe.id, konu.id)" class="not-input y-nesil" :disabled="!aktifSinifFiltresi" /></td>
+                    <td class="hesap-hucre net-renk"><strong>{{ hesaplaNet(sonuclar[`${talebe.id}-${konu.id}`].yD, sonuclar[`${talebe.id}-${konu.id}`].yY) }}</strong></td>
+                    <td class="hesap-hucre basari-renk"><strong>{{ hesaplaBasari(sonuclar[`${talebe.id}-${konu.id}`].yD, sonuclar[`${talebe.id}-${konu.id}`].yY, konu.yeniNesilCount) }}</strong></td>
+                  </template>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -220,14 +290,18 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
 .sayfa-container { padding: 20px; font-family: sans-serif; }
 
 /* GLOBAL FİLTRE PANELİ */
-.global-filtre-paneli { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, #1e293b, #334155); padding: 20px 25px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+.global-filtre-paneli { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, #1e293b, #334155); padding: 20px 25px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); flex-wrap: wrap; gap: 15px;}
 .filtre-baslik { display: flex; align-items: center; gap: 15px; }
 .filtre-baslik .ikon { font-size: 2.5rem; }
 .filtre-baslik h3 { margin: 0 0 5px 0; color: #f8fafc; font-size: 1.2rem; }
 .filtre-baslik p { margin: 0; color: #94a3b8; font-size: 0.9rem; }
 .vurgulu-secim { width: 280px; padding: 12px; font-size: 1.05rem; font-weight: bold; border: 2px solid #3b82f6; background-color: #f8fafc; color: #0f172a; cursor: pointer; border-radius: 8px; }
 
-/* Diğer Tasarımlar */
+/* Sınıf Bloku (Diğer sayfalarla ortak) */
+.sinif-bloku { margin: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-radius: 8px; border: 1px solid #e2e8f0; }
+.sinif-basligi { background-color: #f1f5f9; color: #334155; padding: 12px 20px; border-radius: 8px 8px 0 0; font-size: 1.05rem; font-weight: bold; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; }
+.sinif-mevcudu { background-color: #3b82f6; color: white; padding: 4px 10px; border-radius: 20px; font-size: 0.85rem; }
+
 .filtre-paneli { display: flex; align-items: center; gap: 20px; background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .filtre-grup { display: flex; align-items: center; gap: 10px; }
 .filtre-grup label { font-weight: bold; color: #334155; }
@@ -238,12 +312,12 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
 
 .komisyon-paneli { background: #f8fafc; border: 1px dashed #94a3b8; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
 .komisyon-paneli h3 { margin-top: 0; color: #334155; border-bottom: 2px solid #cbd5e1; padding-bottom: 10px; }
-.detayli-form { display: flex; gap: 15px; width: 100%; align-items: flex-end; }
+.detayli-form { display: flex; gap: 15px; width: 100%; align-items: flex-end; flex-wrap: wrap; }
 .soru-giris { display: flex; flex-direction: column; gap: 5px; }
 .soru-giris label { font-size: 0.85rem; font-weight: bold; color: #475569; }
 .input-text, .select-kutu { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; }
 .w-kucuk { width: 80px; text-align: center; }
-.w-buyuk { flex: 1; }
+.w-buyuk { flex: 1; min-width: 200px; }
 .btn-yesil { background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; height: 42px; }
 
 .ders-karti { border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 15px; overflow: hidden; background: white; }
@@ -253,7 +327,7 @@ const toggleKonu = (topicId) => acikKonular.value[topicId] = !acikKonular.value[
 .ders-baslik h4 { margin: 0; font-size: 1.1rem; color: #1e293b; }
 .konu-sayisi { font-size: 0.85rem; color: #64748b; font-weight: bold; background: white; padding: 4px 10px; border-radius: 20px; border: 1px solid #cbd5e1; }
 
-.etut-table { width: 100%; border-collapse: collapse; }
+.etut-table { width: 100%; border-collapse: collapse; border-radius: 0 0 8px 8px; overflow: hidden;}
 .etut-table th, .etut-table td { padding: 8px; text-align: center; border: 1px solid #e2e8f0; vertical-align: middle; }
 .etut-table th:nth-child(2), .etut-table td:nth-child(2) { text-align: left; }
 .etut-table tr:hover { background-color: #f8fafc; }

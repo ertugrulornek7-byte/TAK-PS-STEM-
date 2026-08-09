@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
 import { useAuthStore } from '../stores/authStore'
-import axios from 'axios'
+import api from '../api/axios' // GÜVENLİ API
 
 const etutStore = useEtutStore()
 const authStore = useAuthStore()
@@ -12,7 +12,7 @@ const mufredat = ref([])
 const gizleTamamlananlar = ref(false)
 const acikDersler = ref({})
 
-// --- YENİ AKILLI ZAMAN MOTORU (Manuel Tarihler Çöpe Gitti!) ---
+// --- YENİ AKILLI ZAMAN MOTORU ---
 const aylar = [
   { id: 1, ad: 'Ocak' }, { id: 2, ad: 'Şubat' }, { id: 3, ad: 'Mart' },
   { id: 4, ad: 'Nisan' }, { id: 5, ad: 'Mayıs' }, { id: 6, ad: 'Haziran' },
@@ -49,19 +49,51 @@ const dinamikHaftalarKomisyon = computed(() => {
   return Array.from({ length: haftaSayisi }, (_, i) => i + 1);
 })
 
+// ==========================================
+// YENİ SİSTEM: SINIF FİLTRELEME VE YETKİ MOTORU
+// ==========================================
+const ORTAOKUL_SINIFLARI = [
+  { id: '4_NEHARI', name: '4. Sınıf Nehari' },
+  { id: '5_SINIF', name: '5. Sınıf' },
+  { id: '6_SINIF', name: '6. Sınıf' },
+  { id: '7_SINIF', name: '7. Sınıf' },
+  { id: '8_SINIF', name: '8. Sınıf' }
+]
+
+const LISE_SINIFLARI = [
+  { id: '8_NEHARI', name: '8. Sınıf Nehari' },
+  { id: 'LISE_1', name: 'Lise 1' },
+  { id: 'LISE_2', name: 'Lise 2' },
+  { id: 'LISE_3', name: 'Lise 3' }
+]
+
+const tumSiniflar = [...ORTAOKUL_SINIFLARI, ...LISE_SINIFLARI]
+
+const isPersonel = computed(() => authStore.user?.roleLevel === 'PERSONEL')
+const yetkiliSiniflar = computed(() => authStore.user?.managedClassIds || [])
+
+const aktifSinifFiltresi = ref('') // Local filtre durumu
+
+// Sadece personelin yetkili olduğu sınıfları (veya Kurum ise tümünü) filtrede göster
+const izinVerilenSiniflar = computed(() => {
+  if (isPersonel.value) {
+    return tumSiniflar.filter(s => yetkiliSiniflar.value.includes(s.id))
+  }
+  return tumSiniflar
+})
+// ==========================================
+
 onMounted(async () => {
-  await etutStore.gruplariGetir()
-  if (etutStore.talebler.length === 0) await etutStore.talebeleriGetir()
   await mufredatiCek()
 })
 
 const mufredatiCek = async () => {
   const kurumId = authStore.user?.institutionId
   if (!kurumId) return
-  const sinifFiltresi = etutStore.aktifSinifFiltresi || 'GENEL'
+  const sinifFiltresi = aktifSinifFiltresi.value || 'GENEL'
 
   try {
-    const res = await axios.get(`http://localhost:3000/api/curriculum/${kurumId}/${sinifFiltresi}`)
+    const res = await api.get(`/curriculum/${kurumId}/${sinifFiltresi}`)
     mufredat.value = res.data
     res.data.forEach(d => {
       if (acikDersler.value[d.id] === undefined) acikDersler.value[d.id] = false
@@ -69,14 +101,13 @@ const mufredatiCek = async () => {
   } catch (error) { console.error('Müfredat çekilemedi', error) }
 }
 
-watch(() => etutStore.aktifSinifFiltresi, async () => { await mufredatiCek() })
-watch(filtreAy, () => { filtreHafta.value = -1 }) // Ay değişirse haftayı "Tümü" yap
+watch(aktifSinifFiltresi, async () => { await mufredatiCek() })
+watch(filtreAy, () => { filtreHafta.value = -1 })
 
 const filtrelenmisKonular = (ders) => {
   return ders.topics.filter(konu => {
     if (gizleTamamlananlar.value && konuDurumuBul(konu) === 'ISLENDI') return false;
     
-    // Zeki Filtre: Veritabanındaki UTC tarihini okuyup seçilen ay/hafta ile eşleştirir
     if (konu.startDate) {
       const konuTarihi = new Date(konu.startDate);
       const konuAyi = konuTarihi.getMonth() + 1;
@@ -84,7 +115,6 @@ const filtrelenmisKonular = (ders) => {
       if (konuAyi !== filtreAy.value) return false;
       
       if (filtreHafta.value !== -1) {
-        // weekLabel içinde "1. Hafta" yazısını arar
         if (!konu.weekLabel.includes(`${filtreHafta.value}. Hafta`)) return false;
       }
     }
@@ -96,8 +126,10 @@ const dersEkle = async () => {
   if (!yeniDersAd.value) return
   const kurumId = authStore.user?.institutionId
   try {
-    await axios.post('http://localhost:3000/api/curriculum/subject', { 
-      name: yeniDersAd.value, institutionId: kurumId, classGroupId: komisyonSeciliSinif.value 
+    await api.post('/curriculum/subject', { 
+      name: yeniDersAd.value, 
+      institutionId: kurumId, 
+      classId: komisyonSeciliSinif.value 
     })
     yeniDersAd.value = ''
     await mufredatiCek()
@@ -111,7 +143,6 @@ const konuEkle = async () => {
     const ders = mufredat.value.find(d => d.id === seciliDersId.value)
     const sira = ders ? ders.topics.length + 1 : 1
 
-    // 🔥 İŞTE SİHİR BURADA: Ay ve Haftadan Otomatik Başlangıç/Bitiş Hesaplama 🔥
     const yil = new Date().getFullYear();
     const ayIndex = yeniKonu.value.hedefAy - 1;
     const haftaStartGun = ((yeniKonu.value.hedefHafta - 1) * 7) + 1;
@@ -126,10 +157,10 @@ const konuEkle = async () => {
     const aySecim = aylar.find(a => a.id === yeniKonu.value.hedefAy);
     const autoWeekLabel = `${aySecim.ad} - ${yeniKonu.value.hedefHafta}. Hafta`;
 
-    await axios.post('http://localhost:3000/api/curriculum/topic', {
+    await api.post('/curriculum/topic', {
       subjectId: seciliDersId.value, 
       title: yeniKonu.value.title, 
-      weekLabel: autoWeekLabel, // "Mart - 2. Hafta" şeklinde otomatik yazılır
+      weekLabel: autoWeekLabel, 
       startDate: calculatedStartDate, 
       endDate: calculatedEndDate, 
       specialNotes: yeniKonu.value.specialNotes, 
@@ -144,21 +175,20 @@ const konuEkle = async () => {
 
 const durumGuncelle = async (topicId, yeniDurum) => {
   const kurumId = authStore.user?.institutionId
-  const sinifId = etutStore.aktifSinifFiltresi || 'GENEL' 
+  const sinifId = aktifSinifFiltresi.value || 'GENEL' 
 
   try {
-    await axios.post('http://localhost:3000/api/curriculum/progress', {
-      topicId: topicId, institutionId: kurumId, classGroupId: sinifId, status: yeniDurum
+    await api.post('/curriculum/progress', {
+      topicId: topicId, institutionId: kurumId, classId: sinifId, status: yeniDurum
     })
     await mufredatiCek() 
 
-    // 🔥 MÜFREDAT MOTORU TETİKLEYİCİSİ 🔥
     try {
       const suAn = new Date();
       const ay = suAn.getMonth() + 1; 
       const hafta = Math.ceil(suAn.getDate() / 7);
 
-      await axios.post('http://localhost:3000/api/tasks/calculate-progress', {
+      await api.post('/tasks/calculate-progress', {
         institutionId: authStore.user?.institutionId,
         userId: authStore.user?.id,
         month: ay,
@@ -173,7 +203,6 @@ const durumGuncelle = async (topicId, yeniDurum) => {
 
 const toggleDers = (dersId) => acikDersler.value[dersId] = !acikDersler.value[dersId]
 const konuDurumuBul = (topic) => topic.progresses && topic.progresses.length > 0 ? topic.progresses[0].status : 'ISLENMEDI'
-const kisaTarih = (date) => `${date.getDate()}/${date.getMonth() + 1}`
 const gunAyFormatla = (tarih) => {
   if (!tarih) return ''; const d = new Date(tarih); const aylarKisa = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara']; return `${String(d.getDate()).padStart(2, '0')} ${aylarKisa[d.getMonth()]}`
 }
@@ -191,9 +220,9 @@ const gunAyFormatla = (tarih) => {
         </div>
       </div>
       <div class="filtre-secici">
-        <select v-model="etutStore.aktifSinifFiltresi" class="input-text vurgulu-secim">
+        <select v-model="aktifSinifFiltresi" class="input-text vurgulu-secim">
           <option value="">-- Tüm Sınıfların Ortak Dersleri --</option>
-          <option v-for="sinif in etutStore.siniflar" :key="sinif.id" :value="sinif.id">{{ sinif.name }} Müfredatı</option>
+          <option v-for="sinif in izinVerilenSiniflar" :key="sinif.id" :value="sinif.id">{{ sinif.name }} Müfredatı</option>
         </select>
       </div>
     </div>
@@ -221,7 +250,7 @@ const gunAyFormatla = (tarih) => {
       </div>
     </div>
 
-    <div class="komisyon-paneli" v-if="authStore.user?.roles?.includes('KURUM_EM') || authStore.user?.roles?.includes('BOLGE_EM')">
+    <div class="komisyon-paneli" v-if="!isPersonel">
       <h3>👑 Komisyon - Akıllı Konu Planlama</h3>
       <p style="color: #64748b; font-size: 0.9rem;">Siz sadece ay ve haftayı seçin, sistem tarihleri otomatik hesaplayacaktır.</p>
       
@@ -230,7 +259,7 @@ const gunAyFormatla = (tarih) => {
           <input type="text" v-model="yeniDersAd" placeholder="Yeni Branş Adı (Örn: MATEMATİK)" class="input-text w-buyuk" />
           <select v-model="komisyonSeciliSinif" class="select-kutu">
             <option value="GENEL">Tüm Sınıflar İçin Ortak</option>
-            <option v-for="sinif in etutStore.siniflar" :key="sinif.id" :value="sinif.id">Sadece {{ sinif.name }} İçin</option>
+            <option v-for="sinif in tumSiniflar" :key="sinif.id" :value="sinif.id">Sadece {{ sinif.name }} İçin</option>
           </select>
           <button @click="dersEkle" class="btn-mavi">Branş Ekle</button>
         </div>
@@ -260,8 +289,8 @@ const gunAyFormatla = (tarih) => {
 
     <div class="ogretmen-paneli">
       <h3>👨‍🏫 Seçili Sınıfın Müfredat İşleyişi</h3>
-      <p class="aciklama" v-if="etutStore.aktifSinifFiltresi">Şu an <strong>seçili sınıfın</strong> işlediği konuları görüyorsunuz.</p>
-      <p class="aciklama" style="color: #b91c1c; font-weight: bold;" v-else>Lütfen yukarıdan işleyeceğiniz sınıfı seçin!</p>
+      <p class="aciklama" v-if="aktifSinifFiltresi">Şu an <strong>seçili sınıfın</strong> işlediği konuları görüyorsunuz.</p>
+      <p class="aciklama" style="color: #b91c1c; font-weight: bold;" v-else>Tüm sınıflar için genel ortak müfredatı görüyorsunuz.</p>
 
       <div v-for="ders in mufredat" :key="ders.id" class="ders-karti">
         <div class="ders-baslik" @click="toggleDers(ders.id)" :class="{'acik': acikDersler[ders.id]}">
@@ -289,7 +318,7 @@ const gunAyFormatla = (tarih) => {
                   <div class="konu-notu" v-if="konu.specialNotes">📌 {{ konu.specialNotes }}</div>
                 </td>
                 <td>
-                  <select :value="konuDurumuBul(konu)" @change="durumGuncelle(konu.id, $event.target.value)" class="durum-select" :class="konuDurumuBul(konu).toLowerCase()" :disabled="!etutStore.aktifSinifFiltresi">
+                  <select :value="konuDurumuBul(konu)" @change="durumGuncelle(konu.id, $event.target.value)" class="durum-select" :class="konuDurumuBul(konu).toLowerCase()" :disabled="!aktifSinifFiltresi">
                     <option value="ISLENMEDI">❌ İşlenmedi</option>
                     <option value="ISLENIYOR">⏳ Devam Ediyor</option>
                     <option value="ISLENDI">✔️ İşlendi</option>
@@ -306,9 +335,8 @@ const gunAyFormatla = (tarih) => {
 </template>
 
 <style scoped>
-/* ÖNCEKİ STİLLERİN TAMAMEN AYNISIDIR, YENİDEN KOPYALAMANA BİLE GEREK YOK, SADECE HTML'İ DEĞİŞTİRİYORUZ */
 .sayfa-container { padding: 20px; font-family: sans-serif; }
-.global-filtre-paneli { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, #1e293b, #334155); padding: 20px 25px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+.global-filtre-paneli { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(135deg, #1e293b, #334155); padding: 20px 25px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); flex-wrap: wrap; gap: 15px;}
 .filtre-baslik { display: flex; align-items: center; gap: 15px; }
 .filtre-baslik .ikon { font-size: 2.5rem; }
 .filtre-baslik h3 { margin: 0 0 5px 0; color: #f8fafc; font-size: 1.2rem; }
@@ -324,11 +352,11 @@ const gunAyFormatla = (tarih) => {
 .komisyon-paneli { background: #f8fafc; border: 1px dashed #94a3b8; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
 .komisyon-paneli h3 { margin-top: 0; color: #334155; border-bottom: 2px solid #cbd5e1; padding-bottom: 10px; }
 .form-grup { display: flex; gap: 10px; align-items: center; }
-.detayli-form { display: flex; gap: 10px; width: 100%; }
+.detayli-form { display: flex; gap: 10px; width: 100%; flex-wrap: wrap; }
 .cizgi { border: 0; border-top: 1px solid #e2e8f0; margin: 15px 0; }
 .input-text, .select-kutu { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; }
 .w-kucuk { width: 120px; }
-.w-buyuk { flex: 1; }
+.w-buyuk { flex: 1; min-width: 200px; }
 .btn-mavi { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; }
 .btn-yesil { background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; }
 .ogretmen-paneli { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }

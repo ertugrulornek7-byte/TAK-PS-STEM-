@@ -13,7 +13,6 @@ import Sayfa10Denetim from '../views/Sayfa10Denetim.vue'
 import Sayfa11Karne from '../views/Sayfa11Karne.vue'
 import Login from '../views/Login.vue'
 import Sayfa0Dashboard from '../views/Sayfa0Dashboard.vue'
-import SayfaAgim from '../views/SayfaAgim.vue'
 import SayfaGorevler from '../views/SayfaGorevler.vue'
 import Sayfa12Yetki from '../views/Sayfa12Yetki.vue'
 import AdminPanel from '../views/AdminPanel.vue'
@@ -22,7 +21,6 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {path: '/',name: 'dashboard', component: Sayfa0Dashboard},
-    { path: '/agim',name: 'agim',component: SayfaAgim},
     { path: '/talebeler', name: 'talebeler', component: Sayfa1Talebeler },
     { path: '/yoklama', name: 'yoklama', component: Sayfa2Yoklama },
     { path: '/kitap', name: 'kitap', component: Sayfa3Kitap },

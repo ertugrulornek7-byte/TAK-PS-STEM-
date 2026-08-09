@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
 import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
 import { useRoute, useRouter } from 'vue-router'
-import axios from 'axios'
+import api from '../api/axios'
 
 const etutStore = useEtutStore()
 const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
@@ -190,29 +190,37 @@ const getDeneme = (tip, no) => {
         </table>
       </div>
 
-      <div class="modul-kapsayici" v-if="moduller.kitap && Object.keys(kitapDersleri).length > 0">
-        <div class="modul-baslik mavi">WORKWIN YAYINLARI KİTAP ÇÖZÜMLERİ</div>
-        <div v-for="(konular, ders) in kitapDersleri" :key="ders" class="kitap-ders-kapsayici">
-          <div class="alt-baslik sari">{{ ders }}</div>
-          <div class="kitap-grid">
-            <div v-for="tb in konular" :key="tb.id" class="kitap-kutu">
-              <div class="kutu-baslik">{{ tb.topic.title }}</div>
-              <table class="mini-tablo">
-                <tr class="gri-baslik">
-                  <td title="Soru Adedi">S.A</td><td title="Doğru">D</td><td title="Yanlış">Y</td><td title="Net">N</td><td title="Başarı">BAŞARI %</td>
-                </tr>
-                <tr>
-                  <td><strong>{{ tb.topic.normalQuestionCount + tb.topic.yeniNesilCount }}</strong></td>
-                  <td>{{ (tb.normalDogru || 0) + (tb.yeniNesilDogru || 0) }}</td>
-                  <td>{{ (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0) }}</td>
-                  <td><strong>{{ lgsNet((tb.normalDogru || 0) + (tb.yeniNesilDogru || 0), (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0)) }}</strong></td>
-                  <td class="basari-yazi">{{ lgsBasari((tb.normalDogru || 0) + (tb.yeniNesilDogru || 0), (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0), tb.topic.normalQuestionCount + tb.topic.yeniNesilCount) }}</td>
-                </tr>
-              </table>
-            </div>
-          </div>
-        </div>
+     <div class="modul-kapsayici" v-if="moduller.kitap && Object.keys(kitapDersleri).length > 0">
+  <div class="modul-baslik mavi">WORKWIN YAYINLARI KİTAP ÇÖZÜMLERİ</div>
+  <div v-for="(konular, ders) in kitapDersleri" :key="ders" class="kitap-ders-kapsayici">
+    <div class="alt-baslik sari">{{ ders }}</div>
+    <div class="kitap-grid">
+      <div v-for="tb in konular" :key="tb.id" class="kitap-kutu">
+        <div class="kutu-baslik">{{ tb.topic.title }}</div>
+        <table class="mini-tablo">
+          <thead>
+            <tr class="gri-baslik">
+              <th title="Soru Adedi">S.A</th>
+              <th title="Doğru">D</th>
+              <th title="Yanlış">Y</th>
+              <th title="Net">N</th>
+              <th title="Başarı">BAŞARI %</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>{{ tb.topic.normalQuestionCount + tb.topic.yeniNesilCount }}</strong></td>
+              <td>{{ (tb.normalDogru || 0) + (tb.yeniNesilDogru || 0) }}</td>
+              <td>{{ (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0) }}</td>
+              <td><strong>{{ lgsNet((tb.normalDogru || 0) + (tb.yeniNesilDogru || 0), (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0)) }}</strong></td>
+              <td class="basari-yazi">{{ lgsBasari((tb.normalDogru || 0) + (tb.yeniNesilDogru || 0), (tb.normalYanlis || 0) + (tb.yeniNesilYanlis || 0), tb.topic.normalQuestionCount + tb.topic.yeniNesilCount) }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+    </div>
+  </div>
+</div>
 
       <div class="modul-kapsayici" v-if="moduller.yoy">
         <div class="modul-baslik mavi">YAZILI ÖNCESİ YAZILI (Y.Ö.Y) NETİCELERİ</div>
@@ -254,30 +262,44 @@ const getDeneme = (tip, no) => {
       </div>
 
       <div class="modul-kapsayici" v-if="moduller.deneme">
-        <div class="modul-baslik mavi">DENEME VE KDU NETİCELERİ</div>
-        <div class="sinav-grid">
-          <div v-for="sinav in [{t:'DENEME', n:1}, {t:'DENEME', n:2}, {t:'KDU', n:1}, {t:'KDU', n:2}]" :key="sinav.t+sinav.n" class="sinav-kutu">
-            <div class="alt-baslik" :class="sinav.t === 'DENEME' ? 'yesil' : 'mor'">{{ sinav.t }} - {{ sinav.n }}</div>
-            <table class="mini-tablo">
-              <tr class="gri-baslik">
-                <td>TÜR</td><td>MAT</td><td>FEN</td><td>SOS</td><td>İNG</td><td>DİN</td><td>PUAN</td>
-              </tr>
-              <tr v-if="getDeneme(sinav.t, sinav.n)">
-                <td>{{ getDeneme(sinav.t, sinav.n).turkce || '-' }}</td>
-                <td>{{ getDeneme(sinav.t, sinav.n).matematik || '-' }}</td>
-                <td>{{ getDeneme(sinav.t, sinav.n).fen || '-' }}</td>
-                <td>{{ getDeneme(sinav.t, sinav.n).sosyal || '-' }}</td>
-                <td>{{ getDeneme(sinav.t, sinav.n).ingilizce || '-' }}</td>
-                <td>{{ getDeneme(sinav.t, sinav.n).din || '-' }}</td>
-                <td class="puan-yazi"><strong>{{ getDeneme(sinav.t, sinav.n).score || '-' }}</strong></td>
-              </tr>
-              <tr v-else>
-                <td colspan="7" class="bos-yazi">Girmedi</td>
-              </tr>
-            </table>
-          </div>
-        </div>
-      </div>
+  <div class="modul-baslik mavi">DENEME VE KDU NETİCELERİ</div>
+  <div class="sinav-grid">
+    <div v-for="sinav in [{t:'DENEME', n:1}, {t:'DENEME', n:2}, {t:'KDU', n:1}, {t:'KDU', n:2}]" :key="sinav.t+sinav.n" class="sinav-kutu">
+      <div class="alt-baslik" :class="sinav.t === 'DENEME' ? 'yesil' : 'mor'">{{ sinav.t }} - {{ sinav.n }}</div>
+      <table class="mini-tablo">
+        <thead>
+          <tr class="gri-baslik">
+            <th>TÜR</th>
+            <th>MAT</th>
+            <th>FEN</th>
+            <th>SOS</th>
+            <th>İNG</th>
+            <th>DİN</th>
+            <th>PUAN</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-if="getDeneme(sinav.t, sinav.n)">
+            <tr>
+              <td>{{ getDeneme(sinav.t, sinav.n).turkce || '-' }}</td>
+              <td>{{ getDeneme(sinav.t, sinav.n).matematik || '-' }}</td>
+              <td>{{ getDeneme(sinav.t, sinav.n).fen || '-' }}</td>
+              <td>{{ getDeneme(sinav.t, sinav.n).sosyal || '-' }}</td>
+              <td>{{ getDeneme(sinav.t, sinav.n).ingilizce || '-' }}</td>
+              <td>{{ getDeneme(sinav.t, sinav.n).din || '-' }}</td>
+              <td class="puan-yazi"><strong>{{ getDeneme(sinav.t, sinav.n).score || '-' }}</strong></td>
+            </tr>
+          </template>
+          <template v-else>
+            <tr>
+              <td colspan="7" class="bos-yazi">Girmedi</td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
     </div>
   </div>

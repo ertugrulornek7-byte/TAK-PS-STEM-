@@ -1,13 +1,16 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useEtutStore } from '../stores/etutStore'
-import { useAuthStore } from '../stores/authStore' // GÜVENLİK KAPISI EKLENDİ
-import axios from 'axios'
+import { useAuthStore } from '../stores/authStore' 
+import api from '../api/axios' // GÜVENLİ API KULLANIMI
 
 const etutStore = useEtutStore()
-const authStore = useAuthStore() // GÜVENLİK KAPISI BAŞLATILDI
+const authStore = useAuthStore()
 const islemDurumu = ref('')
 const denetimler = ref([])
+
+// Yetki Kontrolü: Normal personel rapor ekleyemez
+const isPersonel = computed(() => authStore.user?.roleLevel === 'PERSONEL')
 
 // Sekme (Tab) Kontrolü
 const roller = [
@@ -17,7 +20,7 @@ const roller = [
 ]
 const seciliRolTab = ref('KURUM')
 
-// Form (İleride sadece yetkililer görecek)
+// Form (Sadece yetkililer görecek)
 const yeniDenetim = ref({
   inspectorRole: 'KURUM',
   inspectorName: '',
@@ -30,11 +33,11 @@ onMounted(async () => {
 })
 
 const denetimleriCek = async () => {
-  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  const kurumId = authStore.user?.institutionId 
   if (!kurumId) return
 
   try {
-    const res = await axios.get(`http://localhost:3000/api/inspections/${kurumId}`)
+    const res = await api.get(`/inspections/${kurumId}`)
     denetimler.value = res.data
   } catch (error) {
     console.error('Denetimler çekilemedi', error)
@@ -53,7 +56,7 @@ const denetimEkle = async () => {
     return
   }
 
-  const kurumId = authStore.user?.institutionId // HAYALET VERİ ÇÖZÜMÜ
+  const kurumId = authStore.user?.institutionId 
   if (!kurumId) {
     alert("Kurum kimliği bulunamadı, sayfayı yenileyin.")
     return
@@ -61,8 +64,8 @@ const denetimEkle = async () => {
   
   islemDurumu.value = 'Rapor Ekleniyor...'
   try {
-    await axios.post('http://localhost:3000/api/inspections', {
-      institutionId: kurumId, // GÜVENLİ MÜHÜR
+    await api.post('/inspections', {
+      institutionId: kurumId, 
       inspectorRole: yeniDenetim.value.inspectorRole,
       inspectorName: yeniDenetim.value.inspectorName,
       inspectionDate: yeniDenetim.value.inspectionDate,
@@ -84,7 +87,7 @@ const denetimEkle = async () => {
 const durumGuncelle = async (id, yeniDurum) => {
   islemDurumu.value = 'Durum Güncelleniyor...'
   try {
-    await axios.put(`http://localhost:3000/api/inspections/${id}`, { fixStatus: yeniDurum })
+    await api.put(`/inspections/${id}`, { fixStatus: yeniDurum })
     islemDurumu.value = 'Güncellendi!'
     setTimeout(() => islemDurumu.value = '', 1000)
     await denetimleriCek() // Arayüzü tazele
@@ -104,7 +107,8 @@ const tarihFormatla = (tarih) => {
   <div class="sayfa-container">
     <h2>Sayfa 10 - Kurum Denetim ve Teftiş Raporları</h2>
 
-    <div class="denetmen-paneli">
+    <!-- YETKİ KALKANI: Personel burayı göremez -->
+    <div class="denetmen-paneli" v-if="!isPersonel">
       <h3>🔒 Denetmen Veri Girişi (Sadece Yetkililer)</h3>
       <div class="form-grup">
         <select v-model="yeniDenetim.inspectorRole" class="input-text w-rol">

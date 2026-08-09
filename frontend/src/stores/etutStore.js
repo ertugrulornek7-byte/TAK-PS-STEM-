@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import axios from 'axios'
+import api from '../api/axios' // Kurumsal API İstemcimiz
 import { useAuthStore } from './authStore'
 
 export const useEtutStore = defineStore('etut', {
@@ -16,16 +16,17 @@ export const useEtutStore = defineStore('etut', {
       const authStore = useAuthStore()
       return authStore.user?.institutionId
     },
+    // Backend zaten yetki kontrolü yaptığı için bu getter artık sadece ön yüz (UI) gizleme/gösterme işlemleri için kullanılacak
     yetkiliMi: () => {
       const authStore = useAuthStore()
-      const roles = authStore.user?.roles
-      if (!roles) return false
-      return String(roles).includes('EM') 
+      const roles = authStore.user?.roles || []
+      return roles.includes('KURUM_EM') || roles.includes('MINTIKA_EM') || roles.includes('BOLGE_EM') || roles.includes('ADMIN')
     },
     gosterilenTalebeler: (state) => {
       let filtrelenmis = state.talebler;
       if (state.aktifSinifFiltresi) {
-        filtrelenmis = state.talebler.filter(t => t.classGroupId === state.aktifSinifFiltresi);
+        // HATA DÜZELTİLDİ: classGroupId değil, veritabanındaki gibi classId olmalı
+        filtrelenmis = state.talebler.filter(t => t.classId === state.aktifSinifFiltresi);
       }
       return filtrelenmis.map((t, index) => ({ ...t, dinamikSira: index + 1 }));
     }
@@ -35,16 +36,16 @@ export const useEtutStore = defineStore('etut', {
     async gruplariGetir() {
       const authStore = useAuthStore()
       const kurumId = authStore.user?.institutionId
-      const userId = authStore.user?.id
       if (!kurumId) return
 
       try {
-        const res = await axios.get(`http://localhost:3000/api/hierarchy/groups/${kurumId}`, {
-          params: { userId: userId, isAdmin: this.yetkiliMi }
-        })
-        // Backend zaten sadece Mustafa'nın sınıflarını (7 ve 8) gönderiyor
+        // HATA DÜZELTİLDİ: Sözdizimi (syntax) hatası giderildi ve doğru endpoint yazıldı.
+        // Artık isAdmin veya userId yollamıyoruz, backend kim olduğumuzu token'dan biliyor!
+        const res = await api.get(`/hierarchy/groups/${kurumId}`)
         this.siniflar = res.data.classes || []
-      } catch (error) { console.error("Sınıflar getirilemedi", error) }
+      } catch (error) { 
+        console.error("Sınıflar getirilemedi", error) 
+      }
     },
 
     async talebeleriGetir() {
@@ -53,7 +54,6 @@ export const useEtutStore = defineStore('etut', {
       
       const authStore = useAuthStore()
       const kurumId = authStore.user?.institutionId
-      const userId = authStore.user?.id
 
       if (!kurumId) {
         this.hata = 'Kurum kimliği bulunamadı.'
@@ -64,9 +64,9 @@ export const useEtutStore = defineStore('etut', {
       try {
         await this.gruplariGetir() 
 
-        // Backend zaten sadece 7 ve 8. sınıf öğrencilerini filtreleyip gönderiyor
-        const res = await axios.get('http://localhost:3000/api/students', {
-          params: { institutionId: kurumId, userId: userId, isAdmin: this.yetkiliMi }
+        // HATA DÜZELTİLDİ: Virgül ve parantez hatası giderildi.
+        const res = await api.get('/students', {
+          params: { institutionId: kurumId }
         })
         this.talebler = res.data
 
@@ -82,16 +82,20 @@ export const useEtutStore = defineStore('etut', {
       const kurumId = authStore.user?.institutionId
       if (!kurumId) throw new Error("Kurum kimliği yok!")
 
-      await axios.post('http://localhost:3000/api/students', { ...yeniTalebe, institutionId: kurumId })
+      // HATA DÜZELTİLDİ: Yeni kayıt eklendiği için "api.get" değil "api.post" olmalı!
+      await api.post('/students', { ...yeniTalebe, institutionId: kurumId })
       await this.talebeleriGetir()
     },
 
     async talebeSil(id) {
       if (!confirm('Bu talebeyi silmek istediğinize emin misiniz?')) return
       try {
-        await axios.delete(`http://localhost:3000/api/students/${id}`)
+        // HATA DÜZELTİLDİ: axios.delete yerine api.delete yapıldı ve tırnak hatası düzeltildi.
+        await api.delete(`/students/${id}`)
         this.talebler = this.talebler.filter(t => t.id !== id)
-      } catch (error) { alert('Silme işlemi başarısız oldu.') }
+      } catch (error) { 
+        alert('Silme işlemi başarısız oldu.') 
+      }
     }
   }
 })

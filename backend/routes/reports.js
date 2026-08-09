@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+// 🔥 GÜVENLİK KALKANLARI İÇERİ ALINIYOR
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
+
+// DİKKAT: Bu dosyaya gelen tüm istekler Kimlik Kontrolünden geçmek zorundadır!
+router.use(authenticate);
 
 // ==========================================
 // ALT MODÜL: KARNE VE RAPORLAMA (SAYFA 11)

@@ -221,7 +221,7 @@ router.post('/bulk-create-users', async (req, res) => {
     res.json({ message: 'Toplu ekleme başarılı!', eklenenler });
   } catch (error) { res.status(500).json({ error: 'Sistemsel bir hata oluştu.' }); }
 });
-// 3. PERSONEL GÜNCELLEME VE TRANSFER (MAKAM/TAPU KONTROLLÜ)
+// 3. PERSONEL GÜNCELLEME VE TRANSFER (YENİ ROLELEVEL UYUMLU)
 router.put('/update-user/:id', async (req, res) => {
   try {
     const { fullName, email, districtId, institutionId, role, password } = req.body;
@@ -231,6 +231,7 @@ router.put('/update-user/:id', async (req, res) => {
       email, 
       districtId: districtId || null, 
       institutionId: institutionId || null, 
+      roleLevel: role || 'PERSONEL', // 🔥 Yeni şema ana alanı
       roles: role ? [role] : undefined 
     };
 
@@ -244,19 +245,17 @@ router.put('/update-user/:id', async (req, res) => {
       data: dataToUpdate
     });
 
-    // 🔥 MAKAM VE TAPU ATAMALARI (HAYALET PERSONEL ÇÖZÜMÜ BURADA)
+    // 🔥 MAKAM VE TAPU ATAMALARI (YENİ ENUM DEĞERLERİNE GÖRE DÜZELTİLDİ)
     
-    if (role === "KURUM_EM" && institutionId) {
+    if (role === "KURUM" && institutionId) {
       await prisma.institution.update({ where: { id: institutionId }, data: { managerId: updatedUser.id } });
     }
     
-    if (role === "MINTIKA_EM" && districtId) {
+    if (role === "MINTIKA" && districtId) {
       await prisma.district.update({ where: { id: districtId }, data: { managerId: updatedUser.id } });
     }
 
-    // EĞER ROL BÖLGE MESULÜ İSE:
-    if (role === "BOLGE_EM" && districtId) {
-      // Seçilen mıntıkanın bağlı olduğu "Bölgeyi (Region)" bulup, o bölgenin tapusunu bu kişiye veriyoruz!
+    if (role === "BOLGE" && districtId) {
       const dist = await prisma.district.findUnique({ where: { id: districtId } });
       if (dist && dist.regionId) {
         await prisma.region.update({ where: { id: dist.regionId }, data: { managerId: updatedUser.id } });
