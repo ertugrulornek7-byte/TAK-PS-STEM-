@@ -1,4 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '../stores/authStore' // 🔥 Pinia Yetki Deposu (Token ve Rolleri buradan alacağız)
+
+// Sayfa İçe Aktarımları (Senin mevcut rotaların)
 import Sayfa1Talebeler from '../views/Sayfa1Talebeler.vue'
 import Sayfa2Yoklama from '../views/Sayfa2Yoklama.vue'
 import Sayfa3Kitap from '../views/Sayfa3Kitap.vue' 
@@ -17,40 +20,88 @@ import SayfaGorevler from '../views/SayfaGorevler.vue'
 import Sayfa12Yetki from '../views/Sayfa12Yetki.vue'
 import AdminPanel from '../views/AdminPanel.vue'
 
+// ==========================================
+// ROTA TANIMLAMALARI VE YETKİ (META) ETİKETLERİ
+// ==========================================
+const routes = [
+  // HERKESİN (Giriş Yapan) GÖREBİLECEĞİ SAYFALAR
+  { path: '/', name: 'dashboard', component: Sayfa0Dashboard, meta: { requiresAuth: true } },
+  { path: '/talebeler', name: 'talebeler', component: Sayfa1Talebeler, meta: { requiresAuth: true } },
+  { path: '/yoklama', name: 'yoklama', component: Sayfa2Yoklama, meta: { requiresAuth: true } },
+  { path: '/kitap', name: 'kitap', component: Sayfa3Kitap, meta: { requiresAuth: true } },
+  { path: '/onerilen-kitaplar', name: 'önerilen kitaplar', component: Sayfa3_1Onerilen, meta: { requiresAuth: true } },
+  { path: '/performans', name: 'performans', component: Sayfa4Performans, meta: { requiresAuth: true } },
+  { path: '/mufredat', name: 'mufredat', component: Sayfa5Mufredat, meta: { requiresAuth: true } },
+  { path: '/yazili', name: 'yazili', component: Sayfa6Yazili, meta: { requiresAuth: true } },
+  { path: '/okul-yazili', name: 'okul-yazili', component: Sayfa7OkulYazili, meta: { requiresAuth: true } },
+  { path: '/sinav', name: 'sinav', component: Sayfa8Sinav, meta: { requiresAuth: true } },
+  { path: '/test-takip', name: 'test-takip', component: Sayfa9TestTakip, meta: { requiresAuth: true } },
+  { path: '/denetim', name: 'denetim', component: Sayfa10Denetim, meta: { requiresAuth: true } },
+  { path: '/karne/:studentId', name: 'karne', component: Sayfa11Karne, meta: { requiresAuth: true } },
+  { path: '/gorevler', name: 'gorevler', component: SayfaGorevler, meta: { requiresAuth: true } },
+  
+  // SADECE GİRİŞ YAPMAMIŞ (MİSAFİR) KULLANICILAR İÇİN
+  { path: '/login', name: 'login', component: Login, meta: { requiresGuest: true } },
+  
+  // ÖZEL YETKİ GEREKTİREN SAYFALAR (Rol Bazlı Koruma)
+  { 
+    path: '/admin', 
+    name: 'AdminPanel', 
+    component: AdminPanel, 
+    meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA'] } 
+  },
+  { 
+    path: '/yetki', 
+    name: 'YetkiYonetimi', 
+    component: Sayfa12Yetki, 
+    meta: { requiresAuth: true, roles: ['SISTEM'] } // Örneğin yetki dağıtımını sadece Sistem yapsın
+  },
+  { 
+    path: '/toplu-ogrenci-ekle', 
+    name: 'TopluOgrenciEkle', 
+    component: () => import('../views/TopluOgrenciEkle.vue'), 
+    meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'] } 
+  },
+
+  // BİLİNMEYEN URL YÖNLENDİRMESİ
+  { path: '/:pathMatch(.*)*', redirect: '/' }
+]
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [
-    {path: '/',name: 'dashboard', component: Sayfa0Dashboard},
-    { path: '/talebeler', name: 'talebeler', component: Sayfa1Talebeler },
-    { path: '/yoklama', name: 'yoklama', component: Sayfa2Yoklama },
-    { path: '/kitap', name: 'kitap', component: Sayfa3Kitap },
-    {path: '/onerilen-kitaplar' ,  name: 'önerilen kitaplar', component: Sayfa3_1Onerilen },
-    { path: '/performans', name: 'performans', component: Sayfa4Performans },
-    { path: '/mufredat', name: 'mufredat', component: Sayfa5Mufredat },
-    { path: '/yazili', name: 'yazili', component: Sayfa6Yazili },
-    { path: '/okul-yazili', name: 'okul-yazili', component: Sayfa7OkulYazili },
-    { path: '/sinav', name: 'sinav', component: Sayfa8Sinav },
-    { path: '/test-takip', name: 'test-takip', component: Sayfa9TestTakip },
-    { path: '/denetim', name: 'denetim', component: Sayfa10Denetim },
-    { path: '/karne/:studentId', name: 'karne', component: Sayfa11Karne },
-    { path: '/login', name: 'login', component: Login },
-    { path: '/gorevler', name: 'gorevler', component: SayfaGorevler },
-    { path: '/yetki', name: 'YetkiYonetimi', component: Sayfa12Yetki },
-    { path: '/toplu-ogrenci-ekle',name: 'TopluOgrenciEkle', component: () => import('../views/TopluOgrenciEkle.vue')},
-    {path: '/admin', name: 'AdminPanel',component: AdminPanel},
-  ]
+  routes
 })
 
-// GÜVENLİK DUVARI: Şifresiz girişleri engelle (YENİ VE HATASIZ HALİ)
-router.beforeEach((to, from) => {
-  const publicPages = ['/login', '/register']
-  const authRequired = !publicPages.includes(to.path)
-  const loggedIn = localStorage.getItem('token')
+// ==========================================
+// 🛡️ FRONTEND GÜVENLİK DUVARI (GELİŞMİŞ ROUTE GUARD)
+// ==========================================
+router.beforeEach((to, from, next) => {
+  // Store'u mutlaka beforeEach içinde çağırıyoruz (Pinia yüklenme sırası hatası almamak için)
+  const authStore = useAuthStore()
+  
+  const isAuthenticated = !!authStore.token
+  const userRole = authStore.user?.roleLevel
 
-  // Eğer sayfa şifre istiyorsa ve kullanıcı giriş yapmadıysa Login'e at!
-  if (authRequired && !loggedIn) {
-    return '/login' // next() yerine direkt return kullanıyoruz
+  // 1. KURAL: Sayfa giriş istiyor ama kullanıcı giriş yapmamışsa -> Login'e şutla
+  if (to.meta.requiresAuth && !isAuthenticated) {
+    return next('/login')
   }
-  return true // Sorun yoksa sayfanın açılmasına izin ver
+
+  // 2. KURAL: Sayfa misafirlere özel (Login) ama kullanıcı giriş yapmışsa -> Dashboard'a at
+  if (to.meta.requiresGuest && isAuthenticated) {
+    return next('/')
+  }
+
+  // 3. KURAL: Sayfa belirli bir rol istiyorsa ve kullanıcının rolü bunu karşılamıyorsa -> Ana sayfaya şutla
+  if (to.meta.roles && to.meta.roles.length > 0) {
+    if (!to.meta.roles.includes(userRole)) {
+      alert('Bu sayfayı görüntüleme yetkiniz bulunmamaktadır.')
+      return next('/') // Yetkisi yoksa anasayfaya at
+    }
+  }
+
+  // Hiçbir engele takılmadıysa sayfanın açılmasına izin ver
+  next()
 })
+
 export default router

@@ -9,12 +9,16 @@ const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 
 router.use(authenticate);
-router.use(authorize(['SISTEM'])); // Sadece sistem yöneticileri bu rotaları kullanabilir
+// 🔥 DÜZELTME: router.use(authorize(['SISTEM'])) TÜM dosyayı SISTEM'e kilitliyordu.
+// Ama /organization ve /users, içindeki BOLGE/MINTIKA/KURUM filtrelerinden ve
+// AdminPanel.vue'daki isBolgeEM/isMintikaEM değişkenlerinden belli ki bu roller
+// için de tasarlanmıştı — blanket kilit onları sessizce 403'e düşürüyordu.
+// Artık her rotaya kendi uygun yetkisi ayrı ayrı veriliyor.
 
 // =====================================
 // 1. KİMLİĞE GÖRE ORGANİZASYON LİSTELEME
 // =====================================
-router.get('/organization', async (req, res) => {
+router.get('/organization', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   const { userId } = req.query;
   try {
     const user = await prisma.user.findUnique({
@@ -66,7 +70,7 @@ router.get('/organization', async (req, res) => {
 // =====================================
 // 2. KİMLİĞE GÖRE PERSONEL LİSTELEME
 // =====================================
-router.get('/users', async (req, res) => {
+router.get('/users', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   const { userId } = req.query;
   try {
     const user = await prisma.user.findUnique({
@@ -82,7 +86,7 @@ router.get('/users', async (req, res) => {
       userFilter = { districtId: user.managedDistrict.id };
     } else if (role === 'KURUM') {
       // 🔥 KURUM SADECE KENDİ KURUMUNDAKİ PERSONELİ GÖREBİLİR!
-      userFilter = { institutionId: user.institutionId }; 
+      userFilter = { institutionId: user.institutionId };
     }
 
     const users = await prisma.user.findMany({
@@ -95,14 +99,15 @@ router.get('/users', async (req, res) => {
 
 // =====================================
 // 3. ATAMA VE YETKİLENDİRME GÜVENLİĞİ
+// (En hassas işlem — sadece SISTEM)
 // =====================================
-router.post('/assign-role', async (req, res) => {
+router.post('/assign-role', authorize(['SISTEM']), async (req, res) => {
   const { userId, newRole, regionId, districtId, institutionId } = req.body;
   try {
     // Enum RoleLevel güncellemesi
-    await prisma.user.update({ 
-      where: { id: userId }, 
-      data: { roleLevel: newRole, roles: [newRole] } 
+    await prisma.user.update({
+      where: { id: userId },
+      data: { roleLevel: newRole, roles: [newRole] }
     });
 
     if (newRole === 'BOLGE' && regionId) {
@@ -116,7 +121,7 @@ router.post('/assign-role', async (req, res) => {
     // Personelin Kurumunu ve Mıntıkasını Güncelle
     let updateData = {};
     if (institutionId) updateData.institutionId = institutionId;
-    if (districtId) updateData.districtId = districtId; 
+    if (districtId) updateData.districtId = districtId;
 
     if (Object.keys(updateData).length > 0) {
       await prisma.user.update({ where: { id: userId }, data: updateData });
@@ -127,35 +132,35 @@ router.post('/assign-role', async (req, res) => {
 });
 
 // =====================================
-// 4. BİRİM EKLEME
+// 4. BİRİM EKLEME (Sadece SISTEM)
 // =====================================
-router.post('/region', async (req, res) => { res.json(await prisma.region.create({ data: { name: req.body.name } })); });
-router.post('/district', async (req, res) => { res.json(await prisma.district.create({ data: { name: req.body.name, regionId: req.body.regionId } })); });
-router.post('/institution', async (req, res) => { res.json(await prisma.institution.create({ data: { name: req.body.name, districtId: req.body.districtId } })); });
+router.post('/region', authorize(['SISTEM']), async (req, res) => { res.json(await prisma.region.create({ data: { name: req.body.name } })); });
+router.post('/district', authorize(['SISTEM']), async (req, res) => { res.json(await prisma.district.create({ data: { name: req.body.name, regionId: req.body.regionId } })); });
+router.post('/institution', authorize(['SISTEM']), async (req, res) => { res.json(await prisma.institution.create({ data: { name: req.body.name, districtId: req.body.districtId } })); });
 
-router.get('/public-districts', async (req, res) => {
-  try { res.json(await prisma.district.findMany({ include: { region: true } })); } 
+router.get('/public-districts', authorize(['SISTEM']), async (req, res) => {
+  try { res.json(await prisma.district.findMany({ include: { region: true } })); }
   catch (error) { res.status(500).json({ error: 'Mıntıkalar çekilemedi.' }); }
 });
 
 // =====================================
-// 5. PERSONEL İŞLEMLERİ
+// 5. PERSONEL İŞLEMLERİ (Sadece SISTEM)
 // =====================================
 
 // 1. TEKLİ PERSONEL OLUŞTURMA
-router.post('/create-user', async (req, res) => {
+router.post('/create-user', authorize(['SISTEM']), async (req, res) => {
   try {
     const { fullName, username, email, districtId, institutionId } = req.body;
-    const rawPassword = Math.floor(1000 + Math.random() * 9000).toString(); 
+    const rawPassword = Math.floor(1000 + Math.random() * 9000).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(rawPassword, salt);
-    
+
     const personelId = Math.floor(1000000 + Math.random() * 9000000).toString();
 
     const user = await prisma.user.create({
       data: {
         fullName, username, email, password: hashedPassword, personelId,
-        roleLevel: "PERSONEL", roles: ["PERSONEL"], 
+        roleLevel: "PERSONEL", roles: ["PERSONEL"],
         districtId: districtId || null, institutionId: institutionId || null
       }
     });
@@ -165,7 +170,7 @@ router.post('/create-user', async (req, res) => {
 });
 
 // 2. EXCEL İLE ÇOKLU PERSONEL OLUŞTURMA
-router.post('/bulk-create-users', async (req, res) => {
+router.post('/bulk-create-users', authorize(['SISTEM']), async (req, res) => {
   try {
     const usersData = req.body.users;
     let eklenenler = [];
@@ -176,9 +181,9 @@ router.post('/bulk-create-users', async (req, res) => {
       const rolExcel = u['ROL/YETKİ']?.toString().trim().toUpperCase();
       const mintikaAd = u['MINTIKA']?.toString().trim();
       const kurumAd = u['KURUM']?.toString().trim();
-      
-      const sifre = (u['ŞİFRE'] !== undefined && u['ŞİFRE'] !== null && String(u['ŞİFRE']).trim() !== '') 
-                    ? String(u['ŞİFRE']) 
+
+      const sifre = (u['ŞİFRE'] !== undefined && u['ŞİFRE'] !== null && String(u['ŞİFRE']).trim() !== '')
+                    ? String(u['ŞİFRE'])
                     : '1234';
 
       if (!adSoyad || !rolExcel) return res.status(400).json({ error: `${i + 2}. satırda AD-SOYAD veya ROL/YETKİ boş olamaz!` });
@@ -188,11 +193,11 @@ router.post('/bulk-create-users', async (req, res) => {
       else if (rolExcel === "KURUM") {
         dbRoleLevel = "KURUM";
         if (!mintikaAd || !kurumAd) return res.status(400).json({ error: `${adSoyad} için MINTIKA ve KURUM zorunludur!` });
-      } 
+      }
       else if (rolExcel === "MINTIKA") {
         dbRoleLevel = "MINTIKA";
         if (!mintikaAd) return res.status(400).json({ error: `${adSoyad} için MINTIKA zorunludur!` });
-      } 
+      }
       else if (rolExcel === "BÖLGE" || rolExcel === "BOLGE") dbRoleLevel = "BOLGE";
 
       let distId = null;
@@ -216,8 +221,8 @@ router.post('/bulk-create-users', async (req, res) => {
       const newUser = await prisma.user.create({
         data: {
           fullName: adSoyad, username: uname, email: u['E-POSTA'] || null,
-          password: hashedPassword, personelId, 
-          roleLevel: dbRoleLevel, roles: [dbRoleLevel], // 🔥 YENİ ŞEMA ATAMASI EKLENDİ
+          password: hashedPassword, personelId,
+          roleLevel: dbRoleLevel, roles: [dbRoleLevel],
           institutionId: instId, districtId: distId
         }
       });
@@ -237,24 +242,24 @@ router.post('/bulk-create-users', async (req, res) => {
 });
 
 // 3. PERSONEL GÜNCELLEME VE TRANSFER
-router.put('/update-user/:id', async (req, res) => {
+router.put('/update-user/:id', authorize(['SISTEM']), async (req, res) => {
   try {
     const { fullName, email, districtId, institutionId, role, password } = req.body;
-    
-    let dataToUpdate = { 
-      fullName, 
-      email, 
-      districtId: districtId || null, 
-      institutionId: institutionId || null, 
-      roleLevel: role || 'PERSONEL', 
-      roles: role ? [role] : undefined 
+
+    let dataToUpdate = {
+      fullName,
+      email,
+      districtId: districtId || null,
+      institutionId: institutionId || null,
+      roleLevel: role || 'PERSONEL',
+      roles: role ? [role] : undefined
     };
 
     if (password && password.trim() !== '') {
       const salt = await bcrypt.genSalt(10);
       dataToUpdate.password = await bcrypt.hash(password, salt);
     }
-    
+
     const updatedUser = await prisma.user.update({
       where: { id: req.params.id },
       data: dataToUpdate
@@ -263,7 +268,7 @@ router.put('/update-user/:id', async (req, res) => {
     if (role === "KURUM" && institutionId) {
       await prisma.institution.update({ where: { id: institutionId }, data: { managerId: updatedUser.id } });
     }
-    
+
     if (role === "MINTIKA" && districtId) {
       await prisma.district.update({ where: { id: districtId }, data: { managerId: updatedUser.id } });
     }
@@ -276,21 +281,21 @@ router.put('/update-user/:id', async (req, res) => {
     }
 
     res.json({ message: 'Personel başarıyla güncellendi ve makama atandı!' });
-  } catch (error) { 
+  } catch (error) {
     console.error("Personel Güncelleme Hatası:", error);
-    res.status(500).json({ error: 'Güncelleme başarısız oldu.' }); 
+    res.status(500).json({ error: 'Güncelleme başarısız oldu.' });
   }
 });
 
 // 4. PERSONEL SİLME İŞLEMİ
-router.delete('/user/:id', async (req, res) => {
+router.delete('/user/:id', authorize(['SISTEM']), async (req, res) => {
   try {
     await prisma.user.delete({
       where: { id: req.params.id }
     });
     res.json({ message: 'Personel başarıyla silindi.' });
-  } catch (error) { 
-    res.status(500).json({ error: 'Personel silinirken hata oluştu. Üzerinde görev olan personeller silinemez.' }); 
+  } catch (error) {
+    res.status(500).json({ error: 'Personel silinirken hata oluştu. Üzerinde görev olan personeller silinemez.' });
   }
 });
 

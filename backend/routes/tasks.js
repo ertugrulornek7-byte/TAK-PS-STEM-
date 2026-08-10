@@ -2,231 +2,233 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const { z } = require('zod'); // 🔥 Zod eklendi
+const validate = require('../middleware/validate'); // 🔥 Bekçimiz eklendi
 
-// GÜVENLİK KALKANLARI
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const HierarchyService = require('../services/hierarchyService');
 
 router.use(authenticate);
 
 // ==========================================
-// 1. KURUMLARA ÖZEL GÖREVLERİ GETİR (EKSİK OLAN 404 ROTASI DÜZELTİLDİ)
+// ZOD ŞEMALARI
 // ==========================================
-router.get('/institution/:institutionId', async (req, res) => {
+const proofSchema = z.object({
+  body: z.object({
+    description: z.string().optional(),
+    photoUrl: z.string().url("Geçersiz URL formatı").optional().or(z.literal(''))
+  })
+});
+
+const assignSmartSchema = z.object({
+  body: z.object({
+    title: z.string({ required_error: "Görev başlığı zorunludur" }).min(3, "Başlık çok kısa"),
+    description: z.string().optional(),
+    moduleType: z.string().optional(),
+    targetDistrictId: z.string().uuid("Geçersiz ID").optional().or(z.literal('')),
+    targetInstitutionId: z.string().uuid("Geçersiz ID").optional().or(z.literal('')),
+    targetType: z.string().optional(),
+    targetRoleId: z.string().optional(),
+    targetUserId: z.string().uuid("Geçersiz Personel ID").optional().or(z.literal('')),
+    targetClassId: z.string().optional().or(z.literal(''))
+  })
+});
+
+// ==========================================
+// 1. PERSONELİN KENDİ GÖREVLERİNİ GÖRMESİ
+// ==========================================
+router.get('/my-tasks', async (req, res) => {
   try {
-    const { institutionId } = req.params;
-
-    const tasks = await prisma.task.findMany({
-      where: { institutionId },
-      include: { progressRecords: true },
-      orderBy: { createdAt: 'desc' }
+    const assignments = await prisma.taskAssignment.findMany({
+      where: { userId: req.user.id },
+      include: { task: true }
     });
 
-    // TaskProgress modelinde User ilişkisi tanımlı olmadığı için isimleri manuel eşliyoruz
-    const userIds = [...new Set(tasks.flatMap(t => t.progressRecords.map(pr => pr.userId)))];
-    const users = await prisma.user.findMany({
-      where: { id: { in: userIds } },
-      select: { id: true, fullName: true }
-    });
+    if (assignments.length === 0) return res.json([]);
+
+    const taskIds = assignments.map(a => a.taskId);
+    let allProofs = [];
     
-    const userMap = users.reduce((acc, user) => {
-      acc[user.id] = user.fullName;
-      return acc;
-    }, {});
+    try {
+      allProofs = await prisma.taskProof.findMany({
+        where: { taskId: { in: taskIds }, userId: req.user.id }
+      });
+    } catch (e) { console.log("Kanıtlar çekilirken uyarı:", e.message); }
 
-    const formattedTasks = tasks.map(task => ({
-      ...task,
-      progressRecords: task.progressRecords.map(pr => ({
-        ...pr,
-        userFullName: userMap[pr.userId] || 'Bilinmeyen Personel'
-      }))
-    }));
+    const result = assignments.map(a => ({
+      ...a,
+      proofs: allProofs
+        .filter(p => p.taskId === a.taskId)
+        .map(p => ({ ...p, description: p.note, photoUrl: p.imageUrl }))
+    })).reverse();
 
-    res.json(formattedTasks);
+    res.json(result);
   } catch (error) {
-    console.error("Kurum görevleri getirme hatası:", error);
+    console.error("Benim görevlerim hatası:", error.message);
     res.status(500).json({ error: 'Görevler getirilemedi.' });
   }
 });
 
 // ==========================================
-// 2. OTOMATİK GÖREV OLUŞTURMA (EKSİK OLAN 404 ROTASI DÜZELTİLDİ)
+// 2. GÖREVE KANIT (PROOF) YÜKLEME (🔥 BEKÇİ EKLENDİ)
 // ==========================================
-router.post('/auto-create', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+router.post('/proof/:assignmentId', validate(proofSchema), async (req, res) => {
   try {
-    const { title, moduleType, month, week, institutionId, senderId } = req.body;
+    const { assignmentId } = req.params;
+    const { description, photoUrl } = req.body;
 
-    // Görev daha önce oluşturulmuş mu kontrol et
-    let task = await prisma.task.findFirst({
-      where: { institutionId, moduleType, month, week }
+    const assignment = await prisma.taskAssignment.findUnique({ 
+      where: { id: assignmentId } 
     });
 
-    if (!task) {
-      task = await prisma.task.create({
-        data: {
-          title,
-          moduleType,
-          month,
-          week,
-          institutionId,
-          senderId,
-          status: 'ISLEMDE',
-          isAutoTracked: true
-        }
-      });
+    if (!assignment || assignment.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Bu görev size atanmamış.' });
     }
 
-    res.json(task);
+    const proof = await prisma.taskProof.create({
+      data: {
+        note: description || '',
+        imageUrl: photoUrl || null,
+        task: { connect: { id: assignment.taskId } },
+        user: { connect: { id: req.user.id } }
+      }
+    });
+
+    try {
+      await prisma.taskAssignment.update({
+        where: { id: assignmentId },
+        data: { status: 'ONAY_BEKLIYOR' }
+      });
+    } catch (e) { console.log("TaskAssignment status güncellenemedi, atlandı."); }
+
+    res.json({ message: 'Kanıt yüklendi.', proof });
   } catch (error) {
-    console.error("Otomatik görev oluşturma hatası:", error);
-    res.status(500).json({ error: 'Görev oluşturulamadı.' });
+    console.error("Kanıt yükleme hatası:", error.message);
+    res.status(500).json({ error: 'Kanıt yüklenemedi.' });
   }
 });
 
 // ==========================================
-// 3. İLERLEME HESAPLA (YENİ ŞEMAYA GÖRE TAMAMEN YENİLENEN MOTOR)
+// 3. YÖNETİCİLER İÇİN KURUM GÖREVLERİNİ LİSTELEME
 // ==========================================
-router.post('/calculate-progress', async (req, res) => {
+router.get('/institution/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   try {
-    const { institutionId, userId, month, week, moduleType } = req.body;
+    const { institutionId } = req.params;
 
-    // 1. Görevi bul
-    const task = await prisma.task.findFirst({
-      where: { institutionId, month, week, moduleType }
-    });
-    if (!task) return res.json({ message: "İlgili ay/hafta için atanmış görev bulunamadı." });
-
-    // 2. Hocanın yetkili olduğu sınıfları bul
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { managedClassIds: true }
-    });
-    
-    if (!user || !user.managedClassIds || user.managedClassIds.length === 0) {
-       return res.json({ message: "Personelin sorumlu olduğu sınıf yok." });
+    if (!HierarchyService.assertOwnsInstitution(req.user, institutionId)) {
+      return res.status(403).json({ error: 'Bu kurumun görevlerini görme yetkiniz yok.' });
     }
 
-    // 3. O sınıflardaki aktif öğrencileri bul
-    const students = await prisma.student.findMany({
-      where: { 
-        institutionId, 
-        classId: { in: user.managedClassIds },
-        status: 'AKTIF'
+    const tasks = await prisma.task.findMany({
+      where: { institutionId },
+      include: {
+        assignments: {
+          include: { user: { select: { id: true, fullName: true, roleLevel: true } } }
+        }
       },
-      select: { id: true }
+      orderBy: { createdAt: 'desc' }
     });
 
-    const totalExpected = students.length;
-    let completedCount = 0;
+    if (tasks.length === 0) return res.json([]);
 
-    // 4. Öğrenciler varsa Yoklama için sayım yap
-    if (totalExpected > 0) {
-      const studentIds = students.map(s => s.id);
-      
-      if (moduleType === 'YOKLAMA') {
-        // Personelin sınıflarındaki öğrencilerden kaç tanesine yoklama girilmiş sayar
-        const attendances = await prisma.attendance.groupBy({
-          by: ['studentId'],
-          where: { studentId: { in: studentIds } }
-        });
-        completedCount = attendances.length;
-      } 
-    }
-
-    const percentage = totalExpected > 0 ? (completedCount / totalExpected) * 100 : 0;
-
-    // 5. TaskProgress kaydını oluştur veya güncelle
-    let progress = await prisma.taskProgress.findFirst({
-      where: { taskId: task.id, userId }
-    });
-
-    if (progress) {
-      progress = await prisma.taskProgress.update({
-        where: { id: progress.id },
-        data: { totalExpected, completedCount, percentage }
-      });
-    } else {
-      progress = await prisma.taskProgress.create({
-        data: {
-          taskId: task.id,
-          userId,
-          institutionId,
-          totalExpected,
-          completedCount,
-          percentage
-        }
-      });
-    }
-
-    res.json(progress);
-  } catch (error) {
-    console.error("Hesaplama hatası:", error);
-    res.status(500).json({ error: 'İlerleme hesaplanamadı.' });
-  }
-});
-
-// ==========================================
-// 4. GÖREV SİLME
-// ==========================================
-router.delete('/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
-  try {
-    const { id } = req.params;
+    const taskIds = tasks.map(t => t.id);
+    let allProofs = [];
     
-    const task = await prisma.task.findUnique({ where: { id } });
-    if (!task) return res.status(404).json({ error: 'Görev bulunamadı.' });
+    try {
+      allProofs = await prisma.taskProof.findMany({
+        where: { taskId: { in: taskIds } }
+      });
+    } catch (e) {}
 
-    // Sadece görevi gönderen kişi veya Sistem Admini silebilir
-    if (task.senderId !== req.user.id && req.user.roleLevel !== 'SISTEM') {
-      return res.status(403).json({ error: 'Bu görevi silme yetkiniz yok.' });
-    }
+    const result = tasks.map(t => ({
+      ...t,
+      assignments: t.assignments ? t.assignments.map(a => ({
+        ...a,
+        proofs: allProofs
+          .filter(p => p.taskId === a.taskId && p.userId === a.userId)
+          .map(p => ({ ...p, description: p.note, photoUrl: p.imageUrl }))
+      })) : []
+    }));
 
-    await prisma.taskProgress.deleteMany({ where: { taskId: id } });
-    await prisma.task.delete({ where: { id } });
-
-    // 📝 AUDIT LOG YAZILIYOR
-    await prisma.auditLog.create({
-      data: { userId: req.user.id, action: 'DELETE', targetType: 'Task', targetId: id, before: JSON.stringify(task) }
-    });
-
-    res.json({ message: 'Görev başarıyla silindi.' });
+    res.json(result);
   } catch (error) {
-    console.error("Görev silme hatası:", error);
-    res.status(500).json({ error: 'Görev silinemedi.' });
+    console.error("Kurum görevleri hatası:", error.message);
+    res.status(500).json({ error: 'Kurum görevleri getirilemedi.' });
   }
 });
+
 // ==========================================
-// 5. AKILLI ATAMA MOTORU (Dinamik Filtreleme)
+// 4. KADEMELİ VE GELİŞMİŞ FİLTRELİ GÖREV ATAMA (🔥 BEKÇİ EKLENDİ)
 // ==========================================
-router.post('/assign-smart', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+router.post('/assign-smart', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(assignSmartSchema), async (req, res) => {
   try {
-    const { taskId, institutionId, classId, roleLevel } = req.body;
+    const { 
+      title, description, moduleType, 
+      targetDistrictId, targetInstitutionId, targetType, targetRoleId, targetUserId, targetClassId 
+    } = req.body;
 
-    // Filtreleme kriterlerini belirle
-    let whereClause = {};
-    if (institutionId) whereClause.institutionId = institutionId;
-    if (classId) whereClause.managedClassIds = { has: classId };
-    if (roleLevel) whereClause.roleLevel = roleLevel;
+    const role = req.user.roleLevel;
+    let userFilter = {};
+    let finalInstitutionId = null;
 
-    // Hedef personelleri bul
-    const targetUsers = await prisma.user.findMany({ where: whereClause });
-
-    if (targetUsers.length === 0) {
-      return res.status(404).json({ error: 'Bu kriterlere uygun personel bulunamadı.' });
+    if (role === 'BOLGE') {
+      if (targetInstitutionId) {
+        userFilter.institutionId = targetInstitutionId;
+        finalInstitutionId = targetInstitutionId;
+      } else if (targetDistrictId) {
+        userFilter.districtId = targetDistrictId;
+      } else {
+        userFilter.district = { regionId: req.user.managedRegion?.id };
+      }
+    } else if (role === 'MINTIKA') {
+      if (targetInstitutionId) {
+        userFilter.institutionId = targetInstitutionId;
+        finalInstitutionId = targetInstitutionId;
+      } else {
+        userFilter.districtId = req.user.managedDistrict?.id;
+      }
+    } else if (role === 'KURUM') {
+      userFilter.institutionId = req.user.institutionId;
+      finalInstitutionId = req.user.institutionId;
     }
 
-    // Atamaları toplu oluştur
-    const assignments = await prisma.taskAssignment.createMany({
-      data: targetUsers.map(user => ({
-        taskId,
-        userId: user.id,
-        institutionId: user.institutionId,
-        classId: classId || null
-      }))
+    if (finalInstitutionId && !HierarchyService.assertOwnsInstitution(req.user, finalInstitutionId)) {
+      return res.status(403).json({ error: 'Bu kuruma görev atama yetkiniz yok.' });
+    }
+
+    const task = await prisma.task.create({
+      data: {
+        title,
+        description,
+        moduleType: moduleType || 'GENEL',
+        status: 'BEKLIYOR',
+        institutionId: finalInstitutionId,
+        senderId: req.user.id
+      }
     });
 
-    res.json({ message: `${targetUsers.length} personele görev başarıyla atandı.`, count: assignments.count });
+    if (targetType === 'TEK_PERSONEL' && targetUserId) {
+      userFilter.id = targetUserId;
+    } else if (targetType === 'ROL_BAZLI' && targetRoleId) {
+      userFilter.roleLevel = targetRoleId;
+    } else if (targetType === 'SINIF_BAZLI' && targetClassId) {
+      userFilter.managedClassIds = { has: targetClassId }; 
+    }
+
+    const targetUsers = await prisma.user.findMany({ where: userFilter });
+
+    if (targetUsers.length > 0) {
+      const assignments = targetUsers.map(u => ({
+        taskId: task.id,
+        userId: u.id
+      }));
+      await prisma.taskAssignment.createMany({ data: assignments });
+    }
+
+    res.json({ message: 'Görev başarıyla oluşturuldu ve atandı.', task, userCount: targetUsers.length });
   } catch (error) {
-    console.error("Akıllı atama hatası:", error);
+    console.error("Görev atama hatası:", error.message);
     res.status(500).json({ error: 'Görev atanamadı.' });
   }
 });

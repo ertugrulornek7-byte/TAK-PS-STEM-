@@ -1,19 +1,38 @@
-require('dotenv').config(); // Ayarlar her şeyden önce yüklenmeli
+// 1. ÇEVRE DEĞİŞKENLERİ VE PAKET İÇE AKTARIMLARI (En üstte olmak zorundadır)
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { PrismaClient } = require('@prisma/client');
 
+const errorHandler = require('./middleware/errorHandler');
+const SchedulerService = require('./services/schedulerService');
+
+// 2. UYGULAMA VE VERİTABANI BAŞLATMA
 const app = express();
-const prisma = new PrismaClient(); // Veritabanı bağlantımızı başlattık
-const port = process.env.PORT || 3000;
+const prisma = new PrismaClient();
+const PORT = process.env.PORT || 3000;
 
-// Sistem için gizli bir anahtar (Gerçek projede .env dosyasına konur)
-const JWT_SECRET = 'etut_takip_cok_gizli_anahtar_2026';
+// =================================================================
+// 3. GÜVENLİK VE HIZ SINIRLANDIRMA (Middleware'ler en başta çalışır)
+// =================================================================
+// Güvenlik başlıklarını ekler
+app.use(helmet()); 
 
+// Gelen istekleri sınırlama (Brute-force koruması)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 dakika
+  max: 100, // Her IP için 15 dakikada en fazla 100 istek
+  message: { error: { message: 'Çok fazla istek attınız, lütfen daha sonra tekrar deneyin.' } }
+});
+app.use('/api/', limiter);
+
+// =================================================================
+// 4. GENEL AYARLAR VE LOGLAMA (CORS, JSON, Radar)
+// =================================================================
 app.use(cors({
-  origin: '*', // Tüm bağlantılara izin ver
+  origin: '*', // Tüm bağlantılara izin ver (Canlıda sadece frontend URL'si olacak)
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -26,17 +45,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- 1. SİSTEM DURUMU ---
+// =================================================================
+// 5. ROTALAR (API Uç Noktaları)
+// =================================================================
+// Sistem Durumu
 app.get('/api/status', (req, res) => {
   res.json({ mesaj: 'Hesap/Hiyerarşi ve Etüt API Servisi Aktif!', durum: 'Başarılı' });
 });
 
-// =================================================================
-// 🚀 YENİ NESİL MİKRO-MODÜLER YAPI (Dosyalara Ayrılmış Sistemler)
-// =================================================================
-
-// 1. ÖZEL İSİMLİ ROTALAR (İsteklerin Çalınmaması İçin EN ÜSTTE olmalılar!)
-app.use('/api/admin', require('./routes/admin')); // Yeni Admin rotamız!
+// Özel İsimli Rotalar
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api/hierarchy', require('./routes/hierarchy'));
 app.use('/api/students', require('./routes/students'));
 app.use('/api/attendance', require('./routes/attendance'));
@@ -46,13 +64,22 @@ app.use('/api/inspections', require('./routes/inspections'));
 app.use('/api/curriculum', require('./routes/curriculum'));
 app.use('/api/testbook', require('./routes/testbook'));
 
-// 2. GENEL ROTALAR (Sadece /api kullananlar EN ALTTA olmalıdır)
+// Genel Rotalar
 app.use('/api', require('./routes/books'));
 app.use('/api', require('./routes/performance'));
 app.use('/api', require('./routes/exams'));
 app.use('/api', require('./routes/reports'));
 
-// Sunucuyu Başlat
-app.listen(port, () => {
-  console.log(`🚀 Backend servisi http://localhost:${port} adresinde çalışıyor`);
+// =================================================================
+// 6. MERKEZİ HATA YAKALAYICI (Tüm Rotalardan SONRA Eklenmek ZORUNDADIR)
+// =================================================================
+app.use(errorHandler);
+
+// =================================================================
+// 7. ZAMANLANMIŞ GÖREV MOTORUNU (Cron) BAŞLAT VE SUNUCUYU AÇ
+// =================================================================
+SchedulerService.init();
+
+app.listen(PORT, () => {
+  console.log(`🚀 Backend servisi http://localhost:${PORT} adresinde çalışıyor`);
 });
