@@ -83,14 +83,20 @@ class HierarchyService {
    * students.js, tasks.js dosyalarının (dolayısıyla sunucunun) açılışta
    * patlamasına yol açıyordu. Şimdi class'ın içine taşındı.
    */
-  static assertOwnsInstitution(user, institutionId) {
-    if (!institutionId) return false;
-    // Üst makamların yetkisi geniştir, alt kurumlarında işlem yapabilirler
-    if (['SISTEM', 'BOLGE', 'MINTIKA'].includes(user.roleLevel)) return true;
+  static async assertOwnsInstitution(user, institutionId) {
+  if (!institutionId) return false;
+  if (user.roleLevel === 'SISTEM') return true;
 
-    // Kurum mesulü ve personel SADECE kendi kurumunda işlem yapabilir
-    return user.institutionId === institutionId;
-  }
+  const institution = await prisma.institution.findUnique({
+    where: { id: institutionId },
+    include: { district: true }
+  });
+  if (!institution) return false;
+
+  if (user.roleLevel === 'BOLGE') return institution.district?.regionId === user.district?.regionId;
+  if (user.roleLevel === 'MINTIKA') return institution.districtId === user.districtId;
+  return user.institutionId === institutionId; // KURUM/PERSONEL
+}
 }
 
 module.exports = HierarchyService;

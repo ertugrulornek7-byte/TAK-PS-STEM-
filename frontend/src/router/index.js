@@ -54,7 +54,7 @@ const routes = [
     path: '/yetki', 
     name: 'YetkiYonetimi', 
     component: Sayfa12Yetki, 
-    meta: { requiresAuth: true, roles: ['SISTEM'] } // Örneğin yetki dağıtımını sadece Sistem yapsın
+    meta: { requiresAuth: true, roles: ['SISTEM', 'KURUM'] } // 🔥 KURUM rolü eklendi
   },
   { 
     path: '/toplu-ogrenci-ekle', 

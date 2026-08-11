@@ -1,0 +1,33 @@
+name: CI
+on: [pull_request, push]
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: cd backend && npm ci
+      - run: cd backend && npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:test@localhost:5432/test
+      - run: cd backend && npm test
+        env:
+          DATABASE_URL: postgresql://postgres:test@localhost:5432/test
+          JWT_SECRET: test-secret
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run build

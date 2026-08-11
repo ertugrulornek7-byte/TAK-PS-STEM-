@@ -16,10 +16,20 @@ class SchedulerService {
 
   static async generateWeeklyTasks() {
     try {
+      // 🔥 DÜZELTME: schema.prisma'da Task.senderId ZORUNLU bir alan (String,
+      // "String?" değil). Bu satır olmadan aşağıdaki prisma.task.create() her
+      // Pazartesi sessizce hata fırlatıyordu ve otomatik görev üretme motoru
+      // fiilen hiç çalışmıyordu (catch bloğu hatayı yutup logluyordu).
+      const sistemUser = await prisma.user.findFirst({ where: { roleLevel: 'SISTEM' } });
+      if (!sistemUser) {
+        console.error('❌ Otomatik görev üretilemedi: Sistemde SISTEM seviyeli bir kullanıcı yok (senderId için gerekli). Önce seed.js veya /setup-admin ile bir SISTEM admini oluştur.');
+        return;
+      }
+
       const now = new Date();
       const currentMonth = now.getMonth() + 1; // 1-12 arası
       // Basit bir hafta hesaplaması (Bulunulan ayın kaçıncı haftası)
-      const currentWeek = Math.ceil(now.getDate() / 7); 
+      const currentWeek = Math.ceil(now.getDate() / 7);
 
       // 1. Tüm aktif kurumları bul
       const institutions = await prisma.institution.findMany();
@@ -27,7 +37,7 @@ class SchedulerService {
       for (const inst of institutions) {
         // 2. Bu kurumdaki standart 'PERSONEL' rolündeki kullanıcıları bul
         const personeller = await prisma.user.findMany({
-          where: { 
+          where: {
             institutionId: inst.id,
             roleLevel: 'PERSONEL'
           }
@@ -45,7 +55,7 @@ class SchedulerService {
             month: currentMonth,
             week: currentWeek,
             institutionId: inst.id,
-            // senderId: null olabilir veya SISTEM admininin ID'si verilebilir
+            senderId: sistemUser.id
           }
         });
 

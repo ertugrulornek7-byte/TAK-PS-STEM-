@@ -25,27 +25,56 @@ const createStudentSchema = z.object({
 });
 
 // ==========================================
-// 1. TALEBELERİ GETİR
+// 1. TALEBELERİ GETİR (SAYFALAMA İLE)
 // ==========================================
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
   try {
     let whereFilter = HierarchyService.getStudentFilter(req.user);
 
-    const { institutionId } = req.query;
+    // URL'den sayfa ve limit parametrelerini al (Varsayılan 1. sayfa, 50 kayıt)
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const { institutionId, search } = req.query;
+    
     if (institutionId) {
       whereFilter = { AND: [whereFilter, { institutionId }] };
     }
+    
+    // Basit bir isme göre arama eklentisi
+    if (search) {
+      whereFilter = { 
+        AND: [
+          whereFilter, 
+          { fullName: { contains: search, mode: 'insensitive' } }
+        ] 
+      };
+    }
 
-    const students = await prisma.student.findMany({
-      where: whereFilter,
-      orderBy: [{ status: 'asc' }, { orderIndex: 'asc' }],
-      include: { institution: true }
+    // Hem veriyi hem de toplam kayıt sayısını aynı anda çek
+    const [students, totalCount] = await Promise.all([
+      prisma.student.findMany({
+        where: whereFilter,
+        orderBy: [{ status: 'asc' }, { orderIndex: 'asc' }],
+        include: { institution: true },
+        skip: skip,
+        take: limit
+      }),
+      prisma.student.count({ where: whereFilter })
+    ]);
+
+    res.json({
+      data: students,
+      meta: {
+        total: totalCount,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit)
+      }
     });
-
-    res.json(students);
   } catch (error) {
-    console.error("Talebe Listeleme Hatası:", error);
-    res.status(500).json({ error: 'Talebeler getirilemedi.' });
+    next(error); // Merkezi hataya yolla
   }
 });
 
@@ -57,7 +86,7 @@ router.post('/', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(cr
     const { studentCode, fullName, institutionId, classId, orderIndex } = req.body;
 
     const targetInstitution = institutionId || req.user.institutionId;
-    if (!HierarchyService.assertOwnsInstitution(req.user, targetInstitution)) {
+    if (!await HierarchyService.assertOwnsInstitution(req.user, targetInstitution)) {
       return res.status(403).json({ error: 'Sadece yetkili olduğunuz kuruma işlem yapabilirsiniz.' });
     }
     if (!targetInstitution) return res.status(400).json({ error: 'Kurum tespit edilemedi!' });
@@ -118,7 +147,7 @@ router.post('/bulk', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (
       }
 
       // Güvenlik Kalkanı: Oluşturulan kurum kullanıcının yetki alanında mı?
-      if (!targetInstitutionId || !HierarchyService.assertOwnsInstitution(req.user, targetInstitutionId)) {
+      if (!targetInstitutionId || !await HierarchyService.assertOwnsInstitution(req.user, targetInstitutionId)) {
         continue; // Yetkisi yoksa bu satırı atla
       }
 

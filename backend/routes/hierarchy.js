@@ -62,7 +62,7 @@ router.get('/personnel/:institutionId', async (req, res) => {
 router.post('/class', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   try {
     // 🔥 KALKAN BURAYA EKLENDİ: Başka kurumun verisine veri yazılmasını engeller
-    if (!HierarchyService.assertOwnsInstitution(req.user, req.body.institutionId)) {
+    if (!await HierarchyService.assertOwnsInstitution(req.user, req.body.institutionId)) {
       return res.status(403).json({ error: 'Bu kuruma sınıf ekleme yetkiniz yok.' });
     }
 
@@ -87,7 +87,7 @@ router.post('/class', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async 
 router.post('/level', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
   try {
     // 🔥 KALKAN BURAYA DA EKLENDİ
-    if (!HierarchyService.assertOwnsInstitution(req.user, req.body.institutionId)) {
+    if (!await HierarchyService.assertOwnsInstitution(req.user, req.body.institutionId)) {
       return res.status(403).json({ error: 'Bu kuruma seviye ekleme yetkiniz yok.' });
     }
 

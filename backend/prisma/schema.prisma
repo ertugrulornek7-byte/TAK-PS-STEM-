@@ -59,7 +59,11 @@ enum TaskStatus {
   TAMAMLANDI
   IPTAL
 }
-
+enum TaskAssignmentStatus {
+  BEKLIYOR
+  ONAY_BEKLIYOR
+  TAMAMLANDI
+}
 enum InspectionStatus {
   BEKLIYOR
   ISLEMDE
@@ -491,7 +495,7 @@ model TaskAssignment {
   userId        String?  
   classId       String?  
   institutionId String?
-  
+  status        TaskAssignmentStatus @default(BEKLIYOR)
   isCompleted   Boolean  @default(false)
   completedAt   DateTime?
 
@@ -521,4 +525,14 @@ model AuditLog {
   createdAt   DateTime @default(now())
 
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

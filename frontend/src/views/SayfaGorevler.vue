@@ -12,7 +12,7 @@ const mintikalar = ref([])
 const kurumlar = ref([])
 const kurumPersonelleri = ref([])
 const islemDurumu = ref('')
-const seciliSekme = ref('BENIM_GOREVLERIM') 
+const seciliSekme = ref('BENIM_GOREVLERIM')
 
 // Sabit Sınıflar (Filtreleme İçin)
 const TUM_SINIFLAR = [
@@ -34,10 +34,11 @@ const yeniGorev = ref({
   moduleType: 'GENEL',
   targetDistrictId: '',
   targetInstitutionId: '',
-  targetType: 'TUMU', 
+  targetType: 'TUMU',
   targetRoleId: 'PERSONEL',
   targetUserId: '',
-  targetClassId: ''
+  targetClassId: '',
+  deadline: '' // 🔥 Tarih alanı eklendi
 })
 
 const kanitFormlari = ref({})
@@ -53,14 +54,13 @@ const yoneticiMi = computed(() => ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'].includ
 // 1. YÜKLEME VE TETİKLEYİCİLER
 // ==========================================
 const sayfaYukle = async () => {
-  // Try-catch ile sarmalandı, hata olursa sayfanın geri kalanı çökmeyecek!
   try {
     await benimGorevlerimiGetir()
   } catch (e) { console.warn("Benim görevlerim alınırken ufak bir pürüz yaşandı."); }
-  
+
   if (yoneticiMi.value) {
     seciliSekme.value = 'YONETIM'
-    
+
     if (isBolge.value || isMintika.value) {
       await bolgeMintikaVerileriniGetir()
     } else if (isKurum.value) {
@@ -72,9 +72,9 @@ const sayfaYukle = async () => {
 
 const bolgeMintikaVerileriniGetir = async () => {
   try {
-    const res = await api.get('/hierarchy/institutions') 
+    const res = await api.get('/hierarchy/institutions')
     kurumlar.value = res.data || []
-    
+
     const dMap = new Map()
     kurumlar.value.forEach(k => {
       if (k.district && !dMap.has(k.district.id)) {
@@ -109,7 +109,7 @@ watch(() => yeniGorev.value.targetInstitutionId, (newId) => {
 const benimGorevlerimiGetir = async () => {
   const res = await api.get('/tasks/my-tasks')
   benimGorevlerim.value = res.data || []
-  
+
   benimGorevlerim.value.forEach(assignment => {
     if (!kanitFormlari.value[assignment.id]) {
       kanitFormlari.value[assignment.id] = { description: '', photoUrl: '' }
@@ -121,7 +121,6 @@ const benimGorevlerimiGetir = async () => {
 // 3. GÖREV ATAMA (KADEMELİ)
 // ==========================================
 const gorevOlustur = async () => {
-  // Kurum mesulü ise kendi kurum ID'sini otomatik zorla
   if (isKurum.value) {
     yeniGorev.value.targetInstitutionId = authStore.user?.institutionId
   }
@@ -131,19 +130,29 @@ const gorevOlustur = async () => {
     setTimeout(() => islemDurumu.value = '', 3000)
     return
   }
-  
+
   islemDurumu.value = 'Görev hedeflere dağıtılıyor...'
   try {
-    const res = await api.post('/tasks/assign-smart', yeniGorev.value)
-    
+    // 🔥 Tarih formatı burada ayarlanıp payload oluşturuluyor
+    const payload = {
+      ...yeniGorev.value,
+      deadline: yeniGorev.value.deadline ? new Date(yeniGorev.value.deadline).toISOString() : null
+    }
+
+    const res = await api.post('/tasks/assign-smart', payload)
+
     islemDurumu.value = `Görev başarıyla atandı! (${res.data.userCount} kişiye iletildi)`
+    
+    // Formu temizle
     yeniGorev.value.title = ''
     yeniGorev.value.description = ''
-    
+    yeniGorev.value.deadline = ''
+
     setTimeout(() => islemDurumu.value = '', 4000)
     if (yeniGorev.value.targetInstitutionId) await kurumaAitVerileriGetir()
   } catch (error) {
-    islemDurumu.value = 'HATA: Görev atanamadı!'
+    const backendMesaji = error.response?.data?.error?.message || error.response?.data?.error
+    islemDurumu.value = backendMesaji ? `HATA: ${backendMesaji}` : 'HATA: Görev atanamadı!'
   }
 }
 
@@ -162,11 +171,23 @@ const kanitGonder = async (assignmentId) => {
       description: form.description,
       photoUrl: form.photoUrl
     })
-    
+
     alert("Kanıt başarıyla gönderildi ve onaya sunuldu!")
     await benimGorevlerimiGetir()
   } catch (error) {
     alert("Hata oluştu!")
+  }
+}
+
+// ==========================================
+// 5. YÖNETİCİNİN GÖREVİ ONAYLAMASI
+// ==========================================
+const gorevOnayla = async (assignmentId) => {
+  try {
+    await api.put(`/tasks/approve/${assignmentId}`)
+    await kurumaAitVerileriGetir()
+  } catch (error) {
+    alert(error.response?.data?.error || "Görev onaylanamadı.")
   }
 }
 
@@ -181,12 +202,12 @@ watch(() => authStore.user, (newVal) => {
 
 <template>
   <div class="sayfa-container">
-    
+
     <div class="sekme-alani" v-if="yoneticiMi">
       <button :class="{'aktif': seciliSekme === 'YONETIM'}" @click="seciliSekme = 'YONETIM'">🏢 Yönetim ve Görev Atama</button>
       <button :class="{'aktif': seciliSekme === 'BENIM_GOREVLERIM'}" @click="seciliSekme = 'BENIM_GOREVLERIM'">📋 Bana Atanan Görevler</button>
     </div>
-    
+
     <div v-else class="baslik-alani">
       <h2>📋 Bana Atanan Görevler</h2>
       <p style="color: #64748b;">Merkez veya kurum mesulü tarafından size atanan görevleri buradan tamamlayabilirsiniz.</p>
@@ -194,12 +215,12 @@ watch(() => authStore.user, (newVal) => {
 
     <!-- 1. YÖNETİM SEKMESİ -->
     <div v-if="seciliSekme === 'YONETIM' && yoneticiMi">
-      
+
       <!-- KADEMELİ KAPSAM SEÇİMİ (Sadece Bölge ve Mıntıka İçin) -->
       <div class="kutu-panel eylem-paneli" style="border-top-color: #f59e0b;" v-if="isBolge || isMintika">
         <h3>🌍 Atama Kapsamını Seçin</h3>
         <div class="form-grid">
-          
+
           <div class="form-eleman" v-if="isBolge">
             <label>1. Aşama: Mıntıka (İsteğe Bağlı)</label>
             <select v-model="yeniGorev.targetDistrictId" class="input-text">
@@ -224,7 +245,7 @@ watch(() => authStore.user, (newVal) => {
       <div class="kutu-panel eylem-paneli">
         <h3>🎯 Hedef Kitle ve Görev Detayı</h3>
         <div class="form-grid">
-          
+
           <div class="form-eleman">
             <label>Hedef Kitle / Filtre</label>
             <select v-model="yeniGorev.targetType" class="input-text">
@@ -263,12 +284,18 @@ watch(() => authStore.user, (newVal) => {
             <label>Görev Başlığı</label>
             <input type="text" v-model="yeniGorev.title" placeholder="Örn: 8. Sınıflar Deneme Analizi" class="input-text" />
           </div>
-          
+
           <div class="form-eleman tam-genislik">
             <label>Detaylı Açıklama</label>
             <textarea v-model="yeniGorev.description" placeholder="Personelin yapması gerekenleri yazın..." class="input-text" rows="2"></textarea>
           </div>
-          
+
+          <!-- 🔥 TARİH SEÇİCİ DOĞRU YERE EKLENDİ -->
+          <div class="form-eleman tam-genislik">
+            <label>Son Teslim Tarihi (Opsiyonel)</label>
+            <input type="datetime-local" v-model="yeniGorev.deadline" class="input-text" />
+          </div>
+
           <div class="form-eleman tam-genislik">
             <button @click="gorevOlustur" class="btn-ata">🚀 Görevi Hedef Kitleye Dağıt</button>
           </div>
@@ -292,7 +319,7 @@ watch(() => authStore.user, (newVal) => {
               <p class="gorev-aciklama">{{ gorev.description }}</p>
             </div>
           </div>
-          
+
           <div class="ilerleme-listesi">
             <div v-if="!gorev.assignments || gorev.assignments.length === 0" class="bilgi-mesaj">
               Bu görev henüz kimseye atanmamış.
@@ -304,6 +331,12 @@ watch(() => authStore.user, (newVal) => {
                 <span class="durum-rozeti" :class="(atama.status || 'bekliyor').toLowerCase()">
                   {{ atama.status === 'BEKLIYOR' ? '⏳ Yapılmadı' : (atama.status === 'ONAY_BEKLIYOR' ? '🔍 Onay Bekliyor' : '✅ Tamamlandı') }}
                 </span>
+                <!-- Yöneticiye onay butonu -->
+                <button
+                  v-if="atama.status === 'ONAY_BEKLIYOR'"
+                  @click="gorevOnayla(atama.id)"
+                  class="btn-onayla"
+                >✅ Onayla</button>
               </div>
             </div>
           </div>
@@ -320,7 +353,7 @@ watch(() => authStore.user, (newVal) => {
           <div class="kart-ust">
             <span class="modul-etiketi-kucuk">{{ atama.task?.moduleType || 'GENEL' }}</span>
           </div>
-          
+
           <h3 class="gorev-baslik">{{ atama.task?.title || 'Başlıksız Görev' }}</h3>
           <p class="gorev-detay">{{ atama.task?.description || 'Açıklama yok.' }}</p>
 
@@ -329,10 +362,10 @@ watch(() => authStore.user, (newVal) => {
           <div v-if="atama.status === 'BEKLIYOR' || !atama.status" class="kanit-formu">
             <label>Neler yaptınız? (Açıklama)</label>
             <textarea v-model="kanitFormlari[atama.id].description" placeholder="Görevle ilgili yaptığınız işlemi anlatın..." rows="2" class="input-text-kucuk"></textarea>
-            
+
             <label>Varsa Fotoğraf/Belge Linki</label>
             <input type="text" v-model="kanitFormlari[atama.id].photoUrl" placeholder="https://..." class="input-text-kucuk" />
-            
+
             <button @click="kanitGonder(atama.id)" class="btn-tamamla">✔️ Görevi Tamamla & Bildir</button>
           </div>
 
@@ -377,14 +410,13 @@ watch(() => authStore.user, (newVal) => {
 .ilerleme-listesi { background: white; padding: 15px; border-radius: 6px; border: 1px solid #cbd5e1; }
 .personel-satir { padding: 10px 0; border-bottom: 1px dashed #cbd5e1; }
 .personel-satir:last-child { border-bottom: none; padding-bottom: 0; }
-.personel-isim { display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem; color: #1e293b; margin-bottom: 8px; }
+.personel-isim { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.95rem; color: #1e293b; margin-bottom: 8px; }
 .durum-rozeti { font-size: 0.8rem; font-weight: bold; padding: 4px 10px; border-radius: 12px; }
 .durum-rozeti.bekliyor { background: #f1f5f9; color: #64748b; }
 .durum-rozeti.onay_bekliyor { background: #fef3c7; color: #d97706; }
 .durum-rozeti.tamamlandi { background: #dcfce7; color: #166534; }
-.kanit-kutusu { background: #f8fafc; padding: 10px; border-radius: 6px; font-size: 0.85rem; color: #475569; border-left: 3px solid #8b5cf6; margin-top: 5px; }
-.link-mavi { color: #2563eb; text-decoration: none; font-weight: bold; }
-.link-mavi:hover { text-decoration: underline; }
+.btn-onayla { background: #10b981; color: white; border: none; padding: 5px 12px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; cursor: pointer; transition: 0.2s; }
+.btn-onayla:hover { background: #059669; }
 
 .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
 .benim-gorev-karti { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); display: flex; flex-direction: column; transition: transform 0.2s; border-top: 5px solid #cbd5e1; }
@@ -407,7 +439,6 @@ watch(() => authStore.user, (newVal) => {
 
 .onay-kutusu { background: #fffbeb; color: #b45309; padding: 12px; border-radius: 6px; font-weight: 500; font-size: 0.9rem; text-align: center; border: 1px solid #fde68a; }
 .tamam-kutusu { background: #f0fdf4; color: #15803d; padding: 12px; border-radius: 6px; font-weight: 500; font-size: 0.9rem; text-align: center; border: 1px solid #bbf7d0; }
-.kendi-kanitim { margin-top: 10px; font-size: 0.85rem; color: #64748b; padding: 8px; background: #f8fafc; border-radius: 6px; }
 
 .toast { margin-top: 15px; background: #dcfce7; color: #166534; padding: 12px; border-radius: 6px; font-weight: bold; text-align: center; }
 .toast.hata { background: #fee2e2; color: #b91c1c; }
