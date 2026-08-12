@@ -13,6 +13,7 @@ const kurumlar = ref([])
 const kurumPersonelleri = ref([])
 const islemDurumu = ref('')
 const seciliSekme = ref('BENIM_GOREVLERIM')
+const gecikenGorevler = ref([])
 
 // Sabit Sınıflar (Filtreleme İçin)
 const TUM_SINIFLAR = [
@@ -116,6 +117,13 @@ const benimGorevlerimiGetir = async () => {
     }
   })
 }
+await gecikenGorevleriGetir()
+const gecikenGorevleriGetir = async () => {
+  try {
+    const res = await api.get('/tasks/gecikenler')
+    gecikenGorevler.value = res.data || []
+  } catch (error) { console.warn("Geciken görevler çekilemedi") }
+}
 
 // ==========================================
 // 3. GÖREV ATAMA (KADEMELİ)
@@ -216,6 +224,23 @@ watch(() => authStore.user, (newVal) => {
     <!-- 1. YÖNETİM SEKMESİ -->
     <div v-if="seciliSekme === 'YONETIM' && yoneticiMi">
 
+<!-- ⚠️ GECİKEN GÖREVLER PANELİ -->
+      <div class="kutu-panel eylem-paneli" style="border-top-color: #ef4444;" v-if="gecikenGorevler.length > 0">
+        <h3 style="color: #ef4444;">⚠️ Geciken Görevler (Teslim Tarihi Geçmiş)</h3>
+        
+        <div v-for="atama in gecikenGorevler" :key="atama.id" class="gorev-karti" style="border-left-color: #ef4444;">
+          <div class="gorev-ust">
+            <div>
+              <h4 style="color: #b91c1c;">{{ atama.task?.title }}</h4>
+              <p class="gorev-aciklama">Atanan Personel: <strong>{{ atama.user?.fullName }}</strong></p>
+              <p style="font-size: 0.85rem; color: #ef4444; margin-top: 5px;">
+                Son Teslim: {{ new Date(atama.task?.deadline).toLocaleString('tr-TR') }}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+      
       <!-- KADEMELİ KAPSAM SEÇİMİ (Sadece Bölge ve Mıntıka İçin) -->
       <div class="kutu-panel eylem-paneli" style="border-top-color: #f59e0b;" v-if="isBolge || isMintika">
         <h3>🌍 Atama Kapsamını Seçin</h3>

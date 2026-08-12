@@ -5,4 +5,4 @@ RUN npm ci --omit=dev
 COPY . .
 RUN npx prisma generate
 EXPOSE 3000
-CMD npx prisma migrate deploy && node index.js
+CMD npx prisma@5 migrate deploy && node index.js

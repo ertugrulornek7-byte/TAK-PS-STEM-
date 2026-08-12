@@ -72,36 +72,24 @@ const router = createRouter({
   routes
 })
 
-// ==========================================
-// 🛡️ FRONTEND GÜVENLİK DUVARI (GELİŞMİŞ ROUTE GUARD)
-// ==========================================
-router.beforeEach((to, from, next) => {
-  // Store'u mutlaka beforeEach içinde çağırıyoruz (Pinia yüklenme sırası hatası almamak için)
+// 🛡️ FRONTEND GÜVENLİK DUVARI (GELİŞMİŞ ROUTE GUARD - YENİ YAPI)
+router.beforeEach((to, from) => {
   const authStore = useAuthStore()
-  
   const isAuthenticated = !!authStore.token
   const userRole = authStore.user?.roleLevel
 
-  // 1. KURAL: Sayfa giriş istiyor ama kullanıcı giriş yapmamışsa -> Login'e şutla
   if (to.meta.requiresAuth && !isAuthenticated) {
-    return next('/login')
+    return '/login'
   }
-
-  // 2. KURAL: Sayfa misafirlere özel (Login) ama kullanıcı giriş yapmışsa -> Dashboard'a at
   if (to.meta.requiresGuest && isAuthenticated) {
-    return next('/')
+    return '/'
   }
-
-  // 3. KURAL: Sayfa belirli bir rol istiyorsa ve kullanıcının rolü bunu karşılamıyorsa -> Ana sayfaya şutla
   if (to.meta.roles && to.meta.roles.length > 0) {
     if (!to.meta.roles.includes(userRole)) {
       alert('Bu sayfayı görüntüleme yetkiniz bulunmamaktadır.')
-      return next('/') // Yetkisi yoksa anasayfaya at
+      return '/' 
     }
   }
-
-  // Hiçbir engele takılmadıysa sayfanın açılmasına izin ver
-  next()
 })
 
 export default router
