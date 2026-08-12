@@ -8,7 +8,7 @@ const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 const validate = require('../middleware/validate');
 const HierarchyService = require('../services/hierarchyService');
-const TaskService = require('../services/taskService'); // 🔥 Servisimiz eklendi
+const TaskService = require('../services/taskService');
 
 router.use(authenticate);
 
@@ -30,7 +30,7 @@ const assignSmartSchema = z.object({
     targetRoleId: z.string().optional(),
     targetUserId: z.string().uuid("Geçersiz Personel ID").optional().or(z.literal('')),
     targetClassId: z.string().optional().or(z.literal('')),
-    deadline: z.string().datetime({ message: "Geçersiz tarih formatı" }).optional().nullable() // 🔥 Tarih eklendi
+    deadline: z.string().datetime({ message: "Geçersiz tarih formatı" }).optional().nullable()
   })
 });
 
@@ -67,9 +67,9 @@ router.get('/my-tasks', async (req, res, next) => {
 router.post('/proof/:assignmentId', validate(proofSchema), async (req, res, next) => {
   try {
     const proof = await TaskService.uploadProof(
-      req.params.assignmentId, 
-      req.user.id, 
-      req.body.description, 
+      req.params.assignmentId,
+      req.user.id,
+      req.body.description,
       req.body.photoUrl
     );
     res.json({ message: 'Kanıt yüklendi.', proof });
@@ -90,7 +90,6 @@ router.get('/institution/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA
       },
       orderBy: { createdAt: 'desc' }
     });
-    // Not: Normalde burada da proofs birleştirilir
     res.json(tasks);
   } catch (error) { next(error); }
 });
@@ -99,16 +98,51 @@ router.get('/institution/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA
 router.post('/assign-smart', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(assignSmartSchema), async (req, res, next) => {
   try {
     const { targetInstitutionId, targetDistrictId, targetType, targetUserId, targetRoleId, targetClassId } = req.body;
-    let userFilter = {};
-    let finalInstitutionId = targetInstitutionId || req.user.institutionId;
+    const role = req.user.roleLevel;
 
-    if (targetType === 'TEK_PERSONEL' && targetUserId) userFilter.id = targetUserId;
-    else if (targetType === 'ROL_BAZLI' && targetRoleId) userFilter.roleLevel = targetRoleId;
-    else if (targetType === 'SINIF_BAZLI' && targetClassId) userFilter.managedClassIds = { has: targetClassId };
+    let finalInstitutionId = targetInstitutionId || (role === 'KURUM' ? req.user.institutionId : null);
+
+    // 🔥 DÜZELTME: targetInstitutionId belirtilmişse, gönderenin gerçekten o
+    // kurum üzerinde yetkisi olduğu doğrulanıyor. Bu kontrol TaskService'e
+    // taşınırken kaybolmuştu — bir KURUM kullanıcısı herhangi bir institutionId
+    // göndererek başka bir kurumun personeline görev atayabiliyordu.
+    if (targetInstitutionId) {
+      const hasAccess = await HierarchyService.assertOwnsInstitution(req.user, targetInstitutionId);
+      if (!hasAccess) return res.status(403).json({ error: 'Bu kuruma görev atama yetkiniz yok.' });
+    }
+
+    let userFilter = {};
+    if (targetType === 'TEK_PERSONEL' && targetUserId) {
+      userFilter.id = targetUserId;
+    } else if (targetType === 'ROL_BAZLI' && targetRoleId) {
+      userFilter.roleLevel = targetRoleId;
+    } else if (targetType === 'SINIF_BAZLI' && targetClassId) {
+      userFilter.managedClassIds = { has: targetClassId };
+    }
+
+    // 🔥 DÜZELTME: "Kapsamdaki Herkes" (targetType === 'TUMU', formun varsayılan
+    // seçeneği) hiçbir kapsam sınırı uygulamıyordu — userFilter boş ({}) kaldığı
+    // için prisma.user.findMany({where:{}}) SİSTEMDEKİ HERKESİ döndürüyordu.
+    // Bir kurum mesulünün "kapsamdaki herkese" gönderdiği görev, hem görev
+    // ataması hem bildirim olarak ülke çapındaki TÜM personele gidiyordu.
+    // Şimdi hedef bir kurum/mıntıka belirtilmediyse gönderenin KENDİ yetki
+    // alanına (kurumu / mıntıkası / bölgesi) daraltılıyor.
+    if (targetInstitutionId) {
+      userFilter.institutionId = targetInstitutionId;
+    } else if (targetDistrictId) {
+      userFilter.districtId = targetDistrictId;
+    } else if (role === 'KURUM') {
+      userFilter.institutionId = req.user.institutionId;
+    } else if (role === 'MINTIKA') {
+      userFilter.districtId = req.user.districtId;
+    } else if (role === 'BOLGE') {
+      userFilter.district = { regionId: req.user.district?.regionId };
+    }
+    // SISTEM rolü hiçbir ek kısıtlama almaz (gerçekten herkese gönderebilmeli)
 
     const targetUsers = await prisma.user.findMany({ where: userFilter });
     const result = await TaskService.assignSmart(req.body, req.user, finalInstitutionId, targetUsers);
-    
+
     res.json({ message: 'Görev başarıyla oluşturuldu ve atandı.', ...result });
   } catch (error) { next(error); }
 });
@@ -121,7 +155,6 @@ router.get('/gecikenler', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), as
     const role = req.user.roleLevel;
     let taskFilter = {};
 
-    // 1. Yönetici sadece kendi yetki alanındaki gecikenleri görebilir
     if (role === 'KURUM') {
       taskFilter.institutionId = req.user.institutionId;
     } else if (role === 'MINTIKA') {
@@ -129,14 +162,12 @@ router.get('/gecikenler', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), as
     } else if (role === 'BOLGE') {
       taskFilter.institution = { district: { regionId: req.user.managedRegion?.id } };
     }
-    // SISTEM rolü için filtre boş kalır, tüm gecikenleri görür.
 
-    // 2. Süresi geçmiş ve durumu TAMAMLANDI olmayan atamaları çek
     const gecikenAtamalar = await prisma.taskAssignment.findMany({
       where: {
         status: { not: 'TAMAMLANDI' },
         task: {
-          deadline: { lt: new Date() }, // Son tarih şu andan küçük (geçmiş)
+          deadline: { lt: new Date() },
           ...taskFilter
         }
       },
@@ -144,13 +175,24 @@ router.get('/gecikenler', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), as
         task: true,
         user: { select: { id: true, fullName: true, roleLevel: true } }
       },
-      orderBy: { task: { deadline: 'asc' } } // En çok gecikenden en aza doğru sırala
+      orderBy: { task: { deadline: 'asc' } }
     });
 
     res.json(gecikenAtamalar);
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
+});
+
+// ==========================================
+// 6. 🔥 GERİ EKLENDİ: YÖNETİCİNİN GÖREVİ ONAYLAMASI
+// SayfaGorevler.vue'nin "Onayla" butonu PUT /tasks/approve/:id çağırıyordu,
+// ama bu uç nokta TaskService'e geçişte dosyadan hiç kopyalanmamıştı — buton
+// 404 alıyor, görevler ONAY_BEKLIYOR durumunda sonsuza dek kalıyordu.
+// ==========================================
+router.put('/approve/:assignmentId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res, next) => {
+  try {
+    const updated = await TaskService.approveTask(req.params.assignmentId, req.user);
+    res.json({ message: 'Görev onaylandı.', assignment: updated });
+  } catch (error) { next(error); }
 });
 
 module.exports = router;
