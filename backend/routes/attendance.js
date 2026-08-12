@@ -104,4 +104,33 @@ router.get('/:studentId', async (req, res, next) => {
   }
 });
 
+// ==========================================
+// HAFTALIK YOKLAMA RAPORU (Ön Yüz İçin)
+// ==========================================
+router.get('/weekly/:institutionId/:startDate/:endDate', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res, next) => {
+  try {
+    const { institutionId, startDate, endDate } = req.params;
+    
+    // Güvenlik Kalkanı: Bu kullanıcı bu kurumu görebilir mi?
+    await HierarchyService.assertOwnsInstitution(req.user, institutionId);
+
+    const records = await prisma.attendance.findMany({
+      where: {
+        institutionId: institutionId,
+        date: {
+          gte: new Date(startDate), // Başlangıç tarihinden büyük eşit
+          lte: new Date(endDate)    // Bitiş tarihinden küçük eşit
+        }
+      },
+      include: {
+        student: { select: { id: true, fullName: true, classId: true } },
+        class: true
+      }
+    });
+
+    res.json(records);
+  } catch (error) {
+    next(error);
+  }
+});
 module.exports = router;
