@@ -39,7 +39,7 @@ const yeniGorev = ref({
   targetRoleId: 'PERSONEL',
   targetUserId: '',
   targetClassId: '',
-  deadline: '' // 🔥 Tarih alanı eklendi
+  deadline: '' 
 })
 
 const kanitFormlari = ref({})
@@ -52,25 +52,8 @@ const isKurum = computed(() => role.value === 'KURUM')
 const yoneticiMi = computed(() => ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'].includes(role.value))
 
 // ==========================================
-// 1. YÜKLEME VE TETİKLEYİCİLER
+// 1. VERİ ÇEKME FONKSİYONLARI (Önce tanımlanmalı)
 // ==========================================
-const sayfaYukle = async () => {
-  try {
-    await benimGorevlerimiGetir()
-  } catch (e) { console.warn("Benim görevlerim alınırken ufak bir pürüz yaşandı."); }
-
-  if (yoneticiMi.value) {
-    seciliSekme.value = 'YONETIM'
-
-    if (isBolge.value || isMintika.value) {
-      await bolgeMintikaVerileriniGetir()
-    } else if (isKurum.value) {
-      yeniGorev.value.targetInstitutionId = authStore.user?.institutionId
-      await kurumaAitVerileriGetir()
-    }
-  }
-}
-
 const bolgeMintikaVerileriniGetir = async () => {
   try {
     const res = await api.get('/hierarchy/institutions')
@@ -99,14 +82,6 @@ const kurumaAitVerileriGetir = async () => {
   } catch (error) { console.warn("Kurum personelleri çekilemedi") }
 }
 
-// Filtre Değişim İzleyicileri
-watch(() => yeniGorev.value.targetInstitutionId, (newId) => {
-  if (newId) kurumaAitVerileriGetir()
-})
-
-// ==========================================
-// 2. VERİ ÇEKME
-// ==========================================
 const benimGorevlerimiGetir = async () => {
   const res = await api.get('/tasks/my-tasks')
   benimGorevlerim.value = res.data || []
@@ -117,13 +92,41 @@ const benimGorevlerimiGetir = async () => {
     }
   })
 }
-await gecikenGorevleriGetir()
+
 const gecikenGorevleriGetir = async () => {
   try {
     const res = await api.get('/tasks/gecikenler')
     gecikenGorevler.value = res.data || []
   } catch (error) { console.warn("Geciken görevler çekilemedi") }
 }
+
+// ==========================================
+// 2. ANA YÜKLEME VE TETİKLEYİCİLER
+// ==========================================
+const sayfaYukle = async () => {
+  try {
+    await benimGorevlerimiGetir()
+  } catch (e) { console.warn("Benim görevlerim alınırken ufak bir pürüz yaşandı."); }
+
+  if (yoneticiMi.value) {
+    seciliSekme.value = 'YONETIM'
+
+    if (isBolge.value || isMintika.value) {
+      await bolgeMintikaVerileriniGetir()
+    } else if (isKurum.value) {
+      yeniGorev.value.targetInstitutionId = authStore.user?.institutionId
+      await kurumaAitVerileriGetir()
+    }
+    
+    // 🔥 Top-level'dan kurtardığımız çağrı burada, yöneticilere özel çalışacak!
+    await gecikenGorevleriGetir()
+  }
+}
+
+// Filtre Değişim İzleyicileri
+watch(() => yeniGorev.value.targetInstitutionId, (newId) => {
+  if (newId) kurumaAitVerileriGetir()
+})
 
 // ==========================================
 // 3. GÖREV ATAMA (KADEMELİ)
@@ -141,7 +144,6 @@ const gorevOlustur = async () => {
 
   islemDurumu.value = 'Görev hedeflere dağıtılıyor...'
   try {
-    // 🔥 Tarih formatı burada ayarlanıp payload oluşturuluyor
     const payload = {
       ...yeniGorev.value,
       deadline: yeniGorev.value.deadline ? new Date(yeniGorev.value.deadline).toISOString() : null
@@ -224,7 +226,7 @@ watch(() => authStore.user, (newVal) => {
     <!-- 1. YÖNETİM SEKMESİ -->
     <div v-if="seciliSekme === 'YONETIM' && yoneticiMi">
 
-<!-- ⚠️ GECİKEN GÖREVLER PANELİ -->
+      <!-- ⚠️ GECİKEN GÖREVLER PANELİ -->
       <div class="kutu-panel eylem-paneli" style="border-top-color: #ef4444;" v-if="gecikenGorevler.length > 0">
         <h3 style="color: #ef4444;">⚠️ Geciken Görevler (Teslim Tarihi Geçmiş)</h3>
         
@@ -315,7 +317,6 @@ watch(() => authStore.user, (newVal) => {
             <textarea v-model="yeniGorev.description" placeholder="Personelin yapması gerekenleri yazın..." class="input-text" rows="2"></textarea>
           </div>
 
-          <!-- 🔥 TARİH SEÇİCİ DOĞRU YERE EKLENDİ -->
           <div class="form-eleman tam-genislik">
             <label>Son Teslim Tarihi (Opsiyonel)</label>
             <input type="datetime-local" v-model="yeniGorev.deadline" class="input-text" />

@@ -81,24 +81,24 @@ enum ConnectionStatus {
 // ==========================================
 
 model User {
-  id            String   @id @default(uuid())
-  personelId    String?  @unique 
-  username      String   @unique 
-  email         String?
-  password      String   
-  fullName      String   
+  id              String   @id @default(uuid())
+  personelId      String?  @unique 
+  username        String   @unique 
+  email           String?
+  password        String   
+  fullName        String   
   
-  roles         String[]  @default(["PERSONEL"]) 
-  roleLevel     RoleLevel @default(PERSONEL)
+  roles           String[]  @default(["PERSONEL"]) 
+  roleLevel       RoleLevel @default(PERSONEL)
   
-  districtId    String?
-  district      District? @relation("UserDistrict", fields: [districtId], references: [id])
+  districtId      String?
+  district        District? @relation("UserDistrict", fields: [districtId], references: [id])
 
-  classId       String?
-  class         Class?    @relation("UserClass", fields: [classId], references: [id], onDelete: SetNull)
+  classId         String?
+  class           Class?    @relation("UserClass", fields: [classId], references: [id], onDelete: SetNull)
   
-  institutionId String?  
-  institution   Institution? @relation("InstitutionUsers", fields: [institutionId], references: [id], onDelete: Cascade)
+  institutionId   String?  
+  institution     Institution? @relation("InstitutionUsers", fields: [institutionId], references: [id], onDelete: Cascade)
 
   managedInstitution Institution? @relation("InstitutionManager")
   managedDistrict    District?    @relation("DistrictManager")
@@ -113,7 +113,8 @@ model User {
   
   auditLogs         AuditLog[] 
   assignments       TaskAssignment[]
-  notifications Notification[]
+  notifications     Notification[]
+  taskProofs        TaskProof[] // 🔥 HATA ÖNLEYİCİ: Kanıtlar için ilişki eklendi
 
   @@index([institutionId])
 }
@@ -340,8 +341,8 @@ model PreExamResult {
   studentId      String
   term           String   
   subject        String   
-  targetScore    Int?      
-  actualScore    Int?      
+  targetScore    Int?     
+  actualScore    Int?     
   practiceScores String   @default("[]") 
 
   student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
@@ -461,13 +462,12 @@ model Task {
   moduleType      TaskModuleType?  
   isAutoTracked   Boolean  @default(false) 
   targetUrl       String?  
-  month           Int?     // Geri eklendi
-  week            Int?     // Geri eklendi
-  deadline        DateTime? 
+  month           Int?     
+  week            Int?     
+  deadline        DateTime? // SADECE BİR TANE KALDI
   
   institutionId   String?  
   senderId        String   
-  
   assignments     TaskAssignment[] 
   proofs          TaskProof[]
   progressRecords TaskProgress[] 
@@ -513,6 +513,7 @@ model TaskProof {
   createdAt   DateTime @default(now())
 
   task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade) // 🔥 HATA ÖNLEYİCİ
 }
 
 model AuditLog {

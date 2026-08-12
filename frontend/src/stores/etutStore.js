@@ -42,7 +42,7 @@ export const useEtutStore = defineStore('etut', {
         // HATA DÜZELTİLDİ: Sözdizimi (syntax) hatası giderildi ve doğru endpoint yazıldı.
         // Artık isAdmin veya userId yollamıyoruz, backend kim olduğumuzu token'dan biliyor!
         const res = await api.get(`/hierarchy/groups/${kurumId}`)
-        this.siniflar = res.data.classes || []
+        this.siniflar = res.data?.classes || []
       } catch (error) { 
         console.error("Sınıflar getirilemedi", error) 
       }
@@ -64,11 +64,17 @@ export const useEtutStore = defineStore('etut', {
       try {
         await this.gruplariGetir() 
 
-        // HATA DÜZELTİLDİ: Virgül ve parantez hatası giderildi.
         const res = await api.get('/students', {
           params: { institutionId: kurumId }
         })
-        this.talebler = res.data
+
+        // 🔥 YENİ GÜVENLİK KALKANI EKLENDİ (TypeError: filtrelenmis.map is not a function hatasını engeller)
+        if (Array.isArray(res.data)) {
+          this.talebler = res.data;
+        } else {
+          console.warn('Backend geçerli bir öğrenci dizisi (array) döndürmedi!', res.data);
+          this.talebler = []; // Çökmeyi engellemek için boş liste ata
+        }
 
       } catch (error) {
         this.hata = 'Talebeler yüklenirken hata oluştu.'
