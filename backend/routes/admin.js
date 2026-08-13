@@ -7,6 +7,8 @@ const bcrypt = require('bcryptjs');
 // 🔥 GÜVENLİK KALKANLARI
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const HierarchyService = require('../services/hierarchyService');
+const { resolveOrCreateInstitution } = require('../services/hierarchyProvisioningService');
 
 router.use(authenticate);
 // 🔥 DÜZELTME: router.use(authorize(['SISTEM'])) TÜM dosyayı SISTEM'e kilitliyordu.
@@ -144,13 +146,38 @@ router.get('/public-districts', authorize(['SISTEM']), async (req, res) => {
 });
 
 // =====================================
-// 5. PERSONEL İŞLEMLERİ (Sadece SISTEM)
+// 5. PERSONEL İŞLEMLERİ
+// 🔥 DÜZELTME: create-user ve bulk-create-users artık sadece SISTEM değil,
+// BOLGE ve MINTIKA da kullanabiliyor — istenen "admin tüm personeli, bölge
+// kendi bölgesindekini, mıntıka kendi mıntıkasındakini ekleyebilecek" kuralı.
 // =====================================
 
 // 1. TEKLİ PERSONEL OLUŞTURMA
-router.post('/create-user', authorize(['SISTEM']), async (req, res) => {
+router.post('/create-user', authorize(['SISTEM', 'BOLGE', 'MINTIKA']), async (req, res) => {
   try {
     const { fullName, username, email, districtId, institutionId } = req.body;
+    const role = req.user.roleLevel;
+
+    // 🔥 EKLENDİ: SISTEM dışındaki roller sadece kendi yetki alanlarına
+    // personel ekleyebilir. Önceden bu endpoint SISTEM-only olduğu için hiç
+    // kontrol yoktu; şimdi BOLGE/MINTIKA'ya açılırken bu kontrol de geldi.
+    if (role !== 'SISTEM') {
+      if (institutionId && !await HierarchyService.assertOwnsInstitution(req.user, institutionId)) {
+        return res.status(403).json({ error: 'Bu kuruma personel ekleme yetkiniz yok.' });
+      }
+      if (districtId) {
+        if (role === 'MINTIKA' && req.user.managedDistrict?.id !== districtId) {
+          return res.status(403).json({ error: 'Sadece kendi mıntıkanıza personel ekleyebilirsiniz.' });
+        }
+        if (role === 'BOLGE' && req.user.managedRegion) {
+          const dist = await prisma.district.findUnique({ where: { id: districtId } });
+          if (!dist || dist.regionId !== req.user.managedRegion.id) {
+            return res.status(403).json({ error: 'Sadece kendi bölgenizdeki mıntıkalara personel ekleyebilirsiniz.' });
+          }
+        }
+      }
+    }
+
     const rawPassword = Math.floor(1000 + Math.random() * 9000).toString();
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(rawPassword, salt);
@@ -169,76 +196,124 @@ router.post('/create-user', authorize(['SISTEM']), async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Personel eklenemedi: ' + error.message }); }
 });
 
-// 2. EXCEL İLE ÇOKLU PERSONEL OLUŞTURMA
-router.post('/bulk-create-users', authorize(['SISTEM']), async (req, res) => {
+// 2. EXCEL İLE ÇOKLU PERSONEL OLUŞTURMA — YENİDEN YAZILDI
+//
+// Değişenler:
+// - Artık SISTEM/BOLGE/MINTIKA kullanabiliyor (önceden SISTEM-only).
+// - Excel'de yazan Mıntıka/Kurum sistemde yoksa, yükleyenin YETKİ ALANI
+//   İÇİNDE otomatik oluşturuluyor (hierarchyProvisioningService ile — aynı
+//   mantık talebe toplu yüklemesiyle paylaşılıyor). Önceden sadece
+//   findFirst yapılıyordu, bulunamazsa satır sessizce kurumsuz kalıyordu.
+// - ROL/YETKİ artık ZORUNLU DEĞİL — boş bırakılırsa PERSONEL varsayılır.
+//   Yani istenen "sadece Mıntıka, Kurum, Adı Soyadı" 3 sütunlu basit format
+//   da bu endpoint ile doğrudan çalışır.
+// - Aynı kurumda aynı isimde biri zaten varsa o satır ATLANIYOR (önceden
+//   böyle bir kontrol hiç yoktu, her çalıştırmada yeni bir hesap+şifre
+//   üretilip kişi çoğaltılıyordu).
+// - Bir yükleyici kendi rütbesinin üstünde bir rol atamaya çalışırsa
+//   (örn. MINTIKA kullanıcısı birini BOLGE yapmaya çalışırsa) bu görmezden
+//   gelinip PERSONEL'e düşürülüyor.
+router.post('/bulk-create-users', authorize(['SISTEM', 'BOLGE', 'MINTIKA']), async (req, res, next) => {
   try {
     const usersData = req.body.users;
-    let eklenenler = [];
+    const role = req.user.roleLevel;
 
-    for (let i = 0; i < usersData.length; i++) {
-      const u = usersData[i];
-      const adSoyad = u['AD-SOYAD']?.toString().trim();
-      const rolExcel = u['ROL/YETKİ']?.toString().trim().toUpperCase();
-      const mintikaAd = u['MINTIKA']?.toString().trim();
-      const kurumAd = u['KURUM']?.toString().trim();
+    const izinliRoller = {
+      SISTEM: ['PERSONEL', 'KURUM', 'MINTIKA', 'BOLGE'],
+      BOLGE: ['PERSONEL', 'KURUM', 'MINTIKA'],
+      MINTIKA: ['PERSONEL', 'KURUM']
+    };
 
-      const sifre = (u['ŞİFRE'] !== undefined && u['ŞİFRE'] !== null && String(u['ŞİFRE']).trim() !== '')
-                    ? String(u['ŞİFRE'])
-                    : '1234';
+    let eklenen = 0, atlanan = 0, hatali = 0;
+    const detaylar = [];
 
-      if (!adSoyad || !rolExcel) return res.status(400).json({ error: `${i + 2}. satırda AD-SOYAD veya ROL/YETKİ boş olamaz!` });
+    for (const u of usersData) {
+      const adSoyad = (u['AD-SOYAD'] || u['Adı Soyadı'] || u['ADI SOYADI'] || '').toString().trim();
+      const mintikaAdi = (u['MINTIKA'] || u['Mıntıka'] || '').toString().trim();
+      const kurumAdi = (u['KURUM'] || u['Kurum'] || '').toString().trim();
+      const bolgeAdi = (u['BÖLGE'] || u['Bölge'] || '').toString().trim();
+      const rolExcel = (u['ROL/YETKİ'] || '').toString().trim().toUpperCase();
+      const sifre = (u['ŞİFRE'] && String(u['ŞİFRE']).trim()) || Math.floor(1000 + Math.random() * 9000).toString();
 
-      let dbRoleLevel = "PERSONEL";
-      if (rolExcel === "STANDART") dbRoleLevel = "PERSONEL";
-      else if (rolExcel === "KURUM") {
-        dbRoleLevel = "KURUM";
-        if (!mintikaAd || !kurumAd) return res.status(400).json({ error: `${adSoyad} için MINTIKA ve KURUM zorunludur!` });
+      if (!adSoyad) {
+        hatali++;
+        detaylar.push({ satir: '(boş satır)', sonuc: 'HATA', mesaj: 'Ad Soyad boş olamaz' });
+        continue;
       }
-      else if (rolExcel === "MINTIKA") {
-        dbRoleLevel = "MINTIKA";
-        if (!mintikaAd) return res.status(400).json({ error: `${adSoyad} için MINTIKA zorunludur!` });
+
+      let dbRoleLevel = 'PERSONEL';
+      if (rolExcel === 'BÖLGE') dbRoleLevel = 'BOLGE'; else if (['PERSONEL', 'KURUM', 'MINTIKA', 'BOLGE', 'STANDART'].includes(rolExcel)) {
+        dbRoleLevel = rolExcel === 'STANDART' ? 'PERSONEL' : rolExcel;
       }
-      else if (rolExcel === "BÖLGE" || rolExcel === "BOLGE") dbRoleLevel = "BOLGE";
+      if (!izinliRoller[role].includes(dbRoleLevel)) dbRoleLevel = 'PERSONEL'; // rütbe üstü atama engeli
 
-      let distId = null;
-      let instId = null;
-
-      if (mintikaAd) {
-        const dist = await prisma.district.findFirst({ where: { name: mintikaAd } });
-        if (dist) {
-          distId = dist.id;
-          if (kurumAd) {
-            const inst = await prisma.institution.findFirst({ where: { name: kurumAd, districtId: dist.id } });
-            if (inst) instId = inst.id;
+      // Hedef kurumu bul/oluştur (Mıntıka+Kurum verilmişse)
+      let targetInstitutionId = null;
+      let targetDistrictId = null;
+      try {
+        if (mintikaAdi && kurumAdi) {
+          targetInstitutionId = await resolveOrCreateInstitution({
+            role, user: req.user, bolgeAdi: bolgeAdi || null,
+            mintikaAdi, kurumAdi, kurumKodu: null, nevi: null
+          });
+          if (targetInstitutionId) {
+            const inst = await prisma.institution.findUnique({ where: { id: targetInstitutionId } });
+            targetDistrictId = inst ? inst.districtId : null;
           }
+        } else if (role === 'MINTIKA' && req.user.managedDistrict) {
+          targetDistrictId = req.user.managedDistrict.id; // sadece mıntıka bilgisiyle eklenen personel kendi mıntıkasına düşer
         }
+      } catch (e) {
+        hatali++;
+        detaylar.push({ satir: adSoyad, sonuc: 'HATA', mesaj: e.message });
+        continue;
+      }
+
+      if ((mintikaAdi && kurumAdi) && !targetInstitutionId) {
+        atlanan++;
+        detaylar.push({ satir: adSoyad, sonuc: 'ATLANDI', mesaj: 'Kurum belirlenemedi veya yetki alanınız dışında' });
+        continue;
+      }
+
+      // Aynı isimde, aynı kurumda/mıntıkada zaten personel var mı? (dedup)
+      const mevcut = await prisma.user.findFirst({
+        where: {
+          fullName: { equals: adSoyad, mode: 'insensitive' },
+          ...(targetInstitutionId ? { institutionId: targetInstitutionId } : (targetDistrictId ? { districtId: targetDistrictId } : {}))
+        }
+      });
+      if (mevcut) {
+        atlanan++;
+        detaylar.push({ satir: adSoyad, sonuc: 'ATLANDI', mesaj: 'Bu isimde bir personel zaten kayıtlı' });
+        continue;
       }
 
       const hashedPassword = await bcrypt.hash(sifre, 10);
       const personelId = Math.floor(1000000 + Math.random() * 9000000).toString();
-      const uname = (adSoyad.toLowerCase().replace(/\s+/g, '_').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ı/g, 'i').replace(/ö/g, 'o').replace(/ç/g, 'c') + Math.floor(Math.random()*1000));
+      const uname = (adSoyad.toLowerCase().replace(/\s+/g, '_').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ş/g, 's').replace(/ı/g, 'i').replace(/ö/g, 'o').replace(/ç/g, 'c') + Math.floor(Math.random() * 1000));
 
       const newUser = await prisma.user.create({
         data: {
           fullName: adSoyad, username: uname, email: u['E-POSTA'] || null,
           password: hashedPassword, personelId,
           roleLevel: dbRoleLevel, roles: [dbRoleLevel],
-          institutionId: instId, districtId: distId
+          institutionId: targetInstitutionId, districtId: targetDistrictId
         }
       });
 
-      // 🔥 MAKAM ANAHTARLARINI TESLİM ET
-      if (dbRoleLevel === "KURUM" && instId) {
-        await prisma.institution.update({ where: { id: instId }, data: { managerId: newUser.id } });
+      if (dbRoleLevel === 'KURUM' && targetInstitutionId) {
+        await prisma.institution.update({ where: { id: targetInstitutionId }, data: { managerId: newUser.id } });
       }
-      if (dbRoleLevel === "MINTIKA" && distId) {
-        await prisma.district.update({ where: { id: distId }, data: { managerId: newUser.id } });
+      if (dbRoleLevel === 'MINTIKA' && targetDistrictId) {
+        await prisma.district.update({ where: { id: targetDistrictId }, data: { managerId: newUser.id } });
       }
 
-      eklenenler.push({ fullName: newUser.fullName, username: newUser.username, rawPassword: sifre, kurum: kurumAd || mintikaAd || 'Genel' });
+      eklenen++;
+      detaylar.push({ satir: adSoyad, sonuc: 'EKLENDI', kullaniciAdi: uname, sifre, kurum: kurumAdi || mintikaAdi || 'Genel' });
     }
-    res.json({ message: 'Toplu ekleme başarılı!', eklenenler });
-  } catch (error) { res.status(500).json({ error: 'Sistemsel bir hata oluştu.' }); }
+
+    res.json({ message: 'Toplu ekleme tamamlandı.', eklenen, atlanan, hatali, detaylar });
+  } catch (error) { next(error); }
 });
 
 // 3. PERSONEL GÜNCELLEME VE TRANSFER

@@ -8,6 +8,7 @@ const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
 const HierarchyService = require('../services/hierarchyService');
 const validate = require('../middleware/validate'); // 🔥 Bekçimiz
+const { resolveOrCreateInstitution } = require('../services/hierarchyProvisioningService');
 
 router.use(authenticate);
 
@@ -25,34 +26,59 @@ const createStudentSchema = z.object({
 });
 
 // ==========================================
+// SINIF/SEVİYE ÇÖZÜMLEYİCİ
+// TopluOgrenciEkle.vue'daki "sinifIdCozumle" ile birebir aynı mantık —
+// Excel'de "7", "7.sınıf", "ortaokul 7" gibi serbest metinlerin hepsini
+// sistemdeki sabit anahtarlardan (5_SINIF, 6_SINIF...) birine eşliyor.
+// Fonksiyon kendi çıktısı üzerinde de çalışır (idempotent), yani frontend'in
+// zaten normalize edip gönderdiği bir anahtarı ikinci kez normalize etmek
+// güvenlidir — API'nin doğrudan çağrılması ihtimaline karşı bu bir güvenlik.
+// ==========================================
+function sinifCozumle(gelenSinif) {
+  if (!gelenSinif) return null;
+  const s = String(gelenSinif).toLowerCase().replace(/[\s._-]/g, '');
+
+  if (s.includes('4') && s.includes('nehari')) return { key: '4_NEHARI', label: '4. Sınıf Nehari' };
+  if (s.includes('8') && s.includes('nehari')) return { key: '8_NEHARI', label: '8. Sınıf Nehari' };
+
+  if (s.includes('lise1') || s === 'l1' || s.includes('9')) return { key: 'LISE_1', label: 'Lise 1' };
+  if (s.includes('lise2') || s === 'l2' || s.includes('10')) return { key: 'LISE_2', label: 'Lise 2' };
+  if (s.includes('lise3') || s === 'l3' || s.includes('11')) return { key: 'LISE_3', label: 'Lise 3' };
+
+  if (s.includes('5')) return { key: '5_SINIF', label: '5. Sınıf' };
+  if (s.includes('6')) return { key: '6_SINIF', label: '6. Sınıf' };
+  if (s.includes('7')) return { key: '7_SINIF', label: '7. Sınıf' };
+  if (s.includes('8')) return { key: '8_SINIF', label: '8. Sınıf' };
+
+  return null;
+}
+
+// ==========================================
 // 1. TALEBELERİ GETİR (SAYFALAMA İLE)
 // ==========================================
 router.get('/', async (req, res, next) => {
   try {
     let whereFilter = HierarchyService.getStudentFilter(req.user);
 
-    // URL'den sayfa ve limit parametrelerini al (Varsayılan 1. sayfa, 50 kayıt)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
 
     const { institutionId, search } = req.query;
-    
+
     if (institutionId) {
       whereFilter = { AND: [whereFilter, { institutionId }] };
     }
-    
-    // Basit bir isme göre arama eklentisi
+
     if (search) {
-      whereFilter = { 
+      whereFilter = {
         AND: [
-          whereFilter, 
+          whereFilter,
           { fullName: { contains: search, mode: 'insensitive' } }
-        ] 
+        ]
       };
     }
 
-    // Hem veriyi hem de toplam kayıt sayısını aynı anda çek
     const [students, totalCount] = await Promise.all([
       prisma.student.findMany({
         where: whereFilter,
@@ -74,12 +100,12 @@ router.get('/', async (req, res, next) => {
       }
     });
   } catch (error) {
-    next(error); // Merkezi hataya yolla
+    next(error);
   }
 });
 
 // ==========================================
-// 2. TEKLİ TALEBE EKLEME (🔥 ZOD BEKÇİSİ EKLENDİ)
+// 2. TEKLİ TALEBE EKLEME
 // ==========================================
 router.post('/', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(createStudentSchema), async (req, res) => {
   try {
@@ -106,76 +132,117 @@ router.post('/', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(cr
     res.status(500).json({ error: 'Talebe eklenemedi.' });
   }
 });
+
 // ==========================================
-// 3. AKILLI TOPLU TALEBE YÜKLEME (EXCEL)
+// 3. AKILLI TOPLU TALEBE YÜKLEME (EXCEL) — YENİDEN YAZILDI
+//
+// Değişenler:
+// - Kimlik No (nationalId) ve Talebe Türü (studentType) artık gerçekten
+//   kaydediliyor (önceden şemada yer yoktu, sessizce kayboluyordu).
+// - Okul Seviyesi artık gerçek bir Class kaydına (institutionId + level)
+//   bağlanıyor — sadece bir metin olarak durmuyor.
+// - Kurum kodu artık Institution.code alanına yazılıyor (önceden isme
+//   [KOD] şeklinde gömülüyordu, aranması/eşleşmesi kırılgandı). Bir kuruma
+//   ait İLK kayıt hangi kodu taşıyorsa, kurumun kalıcı kodu o olur.
+// - "Var mı" kontrolü artık sadece studentCode değil; kimlik no ve
+//   (ad soyad + kurum) eşleşmesiyle de yapılıyor — istenen davranış
+//   TAM OLARAK BUYDU: "aynı kodda veya aynı isim soyisimde satırı atla".
+//   Önceki "upsert" davranışı (var olanı sessizce güncelleme) kaldırıldı;
+//   artık var olan bir kayıt tespit edilirse o satır ATLANIYOR, ezilmiyor.
+// - Hiyerarşi otomatik oluşturma artık yükleyenin GERÇEK yetki sınırına
+//   göre yapılıyor (bkz. hierarchyProvisioningService.js) — önceden her
+//   üst makam (MINTIKA dahil) Excel'e istediği bölge/mıntıka adını yazarak
+//   sistemin herhangi bir yerinde yeni birim oluşturabiliyordu.
+// - Sonuç artık sadece bir sayı değil, satır satır dökümle dönüyor.
 // ==========================================
-router.post('/bulk', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res) => {
+router.post('/bulk', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), async (req, res, next) => {
   try {
     const { studentsData } = req.body;
-    let eklenenCount = 0;
-    const isUpperManager = ['SISTEM', 'BOLGE', 'MINTIKA'].includes(req.user.roleLevel);
+    const role = req.user.roleLevel;
+
+    let eklenen = 0, atlanan = 0, hatali = 0;
+    const detaylar = [];
 
     for (const data of studentsData) {
-      if (!data.studentCode || !data.firstName) continue;
+      const fullName = `${data.firstName || ''} ${data.lastName || ''}`.trim();
 
-      let targetInstitutionId = req.user.institutionId; // Varsayılan: Kendi kurumu
-
-      // 🌟 EĞER YÖNETİCİ İSE: HİYERARŞİYİ OTOMATİK OLUŞTUR (Kurum Kodu'na Göre)
-      if (isUpperManager && data.bolge && data.mintika && data.kurum) {
-        
-        // 1. Bölgeyi Bul veya Oluştur
-        let region = await prisma.region.findFirst({ where: { name: data.bolge } });
-        if (!region) {
-          region = await prisma.region.create({ data: { name: data.bolge } });
-        }
-
-        // 2. Mıntıkâyı Bul veya Oluştur
-        let district = await prisma.district.findFirst({ where: { name: data.mintika, regionId: region.id } });
-        if (!district) {
-          district = await prisma.district.create({ data: { name: data.mintika, regionId: region.id } });
-        }
-
-        // 3. Kurumu Bul veya Oluştur (Kurum Kodunu isme gömerek eşsizleştiriyoruz)
-        const kurumIsmi = data.kurumKodu ? `[${data.kurumKodu}] ${data.kurum}` : data.kurum;
-        let institution = await prisma.institution.findFirst({ where: { name: kurumIsmi, districtId: district.id } });
-        
-        if (!institution) {
-          institution = await prisma.institution.create({ data: { name: kurumIsmi, districtId: district.id } });
-        }
-        
-        targetInstitutionId = institution.id; // Hedefi yeni oluşturulan/bulunan kurum yap
+      if (!data.studentCode || !fullName) {
+        hatali++;
+        detaylar.push({ satir: fullName || data.studentCode || '(bilinmiyor)', sonuc: 'HATA', mesaj: 'Talebe Kodu veya Ad Soyad eksik' });
+        continue;
       }
 
-      // Güvenlik Kalkanı: Oluşturulan kurum kullanıcının yetki alanında mı?
+      // 1. Hedef kurumu bul / oluştur (yetki sınırına göre)
+      let targetInstitutionId;
+      try {
+        targetInstitutionId = await resolveOrCreateInstitution({
+          role,
+          user: req.user,
+          bolgeAdi: data.bolge,
+          mintikaAdi: data.mintika,
+          kurumAdi: data.kurum,
+          kurumKodu: data.kurumKodu,
+          nevi: data.nevi
+        });
+      } catch (e) {
+        hatali++;
+        detaylar.push({ satir: fullName, sonuc: 'HATA', mesaj: e.message });
+        continue;
+      }
+
       if (!targetInstitutionId || !await HierarchyService.assertOwnsInstitution(req.user, targetInstitutionId)) {
-        continue; // Yetkisi yoksa bu satırı atla
+        atlanan++;
+        detaylar.push({ satir: fullName, sonuc: 'ATLANDI', mesaj: 'Kurum belirlenemedi veya bu kurum yetki alanınızda değil' });
+        continue;
       }
 
-      const fullName = `${data.firstName} ${data.lastName}`.trim();
+      // 2. Aynı kişi zaten kayıtlı mı? (kod / kimlik no / ad-soyad+kurum)
+      const temizKimlik = data.kimlikNo ? String(data.kimlikNo).trim() : null;
+      const orFiltre = [{ studentCode: data.studentCode }];
+      if (temizKimlik) orFiltre.push({ nationalId: temizKimlik });
+      orFiltre.push({ fullName, institutionId: targetInstitutionId });
 
-      // 4. Talebeyi Bul veya Oluştur (Upsert)
-      await prisma.student.upsert({
-        where: { studentCode: data.studentCode },
-        update: {
-          fullName: fullName,
-          institutionId: targetInstitutionId
-          // Not: Kimlik No ve Okul Seviyesi alanları şemaya eklendiğinde buraya yazılacak
-        },
-        create: {
+      const mevcut = await prisma.student.findFirst({ where: { OR: orFiltre } });
+      if (mevcut) {
+        atlanan++;
+        detaylar.push({ satir: fullName, sonuc: 'ATLANDI', mesaj: 'Bu talebe zaten kayıtlı (kod/kimlik/isim eşleşti)' });
+        continue;
+      }
+
+      // 3. Sınıf/seviye çözümle, gerçek bir Class kaydına bağla
+      let classId = null;
+      const seviye = sinifCozumle(data.classId);
+      if (seviye) {
+        let klas = await prisma.class.findFirst({ where: { institutionId: targetInstitutionId, level: seviye.key } });
+        if (!klas) {
+          klas = await prisma.class.create({ data: { institutionId: targetInstitutionId, level: seviye.key, name: seviye.label } });
+        }
+        classId = klas.id;
+      }
+
+      // 4. Talebeyi oluştur
+      await prisma.student.create({
+        data: {
           studentCode: data.studentCode,
-          fullName: fullName,
-          institutionId: targetInstitutionId
+          fullName,
+          institutionId: targetInstitutionId,
+          nationalId: temizKimlik,
+          studentType: data.talebeTuru || null,
+          classId,
+          orderIndex: 999
         }
       });
-      eklenenCount++;
+
+      eklenen++;
+      detaylar.push({ satir: fullName, sonuc: 'EKLENDI' });
     }
 
-    res.json({ success: true, eklenenCount });
+    res.json({ success: true, eklenen, atlanan, hatali, detaylar });
   } catch (error) {
-    console.error("Toplu ekleme hatası:", error);
-    res.status(500).json({ error: 'Toplu ekleme sırasında sunucuda bir hata oluştu.' });
+    next(error);
   }
 });
+
 // ==========================================
 // 4. AKILLI SİLME VE GÜVENLİK LOGU
 // ==========================================
