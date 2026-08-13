@@ -1,14 +1,45 @@
 const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { z } = require('zod');
+
+// 🔥 GÜVENLİK KALKANLARI İÇERİ ALINIYOR
 const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
+const validate = require('../middleware/validate');
+const HierarchyService = require('../services/hierarchyService');
+
+// DİKKAT: Bu dosyaya gelen tüm istekler Kimlik Kontrolünden geçmek zorundadır!
 router.use(authenticate);
+const prisma = new PrismaClient();
+
+// ==========================================
+// VERİ DOĞRULAMA ŞABLONLARI (ZOD)
+// ==========================================
+const inviteSchema = z.object({
+  body: z.object({
+    senderId: z.string().uuid("Geçersiz Gönderen ID").optional(),
+    receiverId: z.string().uuid("Geçersiz Alıcı ID"),
+    targetType: z.string().min(1, "Hedef türü zorunludur"),
+    targetId: z.string().uuid("Geçersiz Hedef ID")
+  })
+});
+
+const acceptSchema = z.object({
+  body: z.object({
+    requestId: z.string().uuid("Geçersiz İstek ID"),
+    receiverId: z.string().uuid("Geçersiz Alıcı ID").optional(),
+    targetType: z.string().min(1, "Hedef türü zorunludur"),
+    targetId: z.string().uuid("Geçersiz Hedef ID")
+  })
+});
+
 // ==========================================
 // ALT MODÜL: AĞ VE DAVET SİSTEMİ
 // ==========================================
 
-router.get('/search', async (req, res) => {
+// 1. Personel Arama
+router.get('/search', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
     const { q } = req.query; 
     if (!q) return res.json([]);
@@ -23,14 +54,20 @@ router.get('/search', async (req, res) => {
       select: { id: true, username: true, fullName: true, roles: true, personelId: true }
     });
     res.json(users);
-  } catch (error) {
-    res.status(500).json({ error: 'Arama yapılamadı.' });
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/invite', async (req, res) => {
+// 2. Davet Gönderme
+router.post('/invite', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(inviteSchema), async (req, res, next) => {
   try {
-    const { senderId, receiverId, targetType, targetId } = req.body;
+    const { receiverId, targetType, targetId } = req.body;
+    const senderId = req.user.id; // Güvenlik: Gönderen daima isteği yapan kişidir.
+
+    // Güvenlik Kalkanı: Yöneticisi olmadığı bir kuruma adam davet edemez!
+    if (targetType === 'INSTITUTION' && !await HierarchyService.assertOwnsInstitution(req.user, targetId)) {
+      return res.status(403).json({ error: 'Sadece yetkili olduğunuz kurumlara davet gönderebilirsiniz.' });
+    }
+
     const existing = await prisma.connectionRequest.findFirst({
       where: { senderId, receiverId, status: 'PENDING' }
     });
@@ -40,27 +77,42 @@ router.post('/invite', async (req, res) => {
       data: { senderId, receiverId, targetType, targetId }
     });
     res.json({ message: 'Davet başarıyla gönderildi!', request });
-  } catch (error) {
-    res.status(500).json({ error: `Sistem Hatası: ${error.message}` });
-  }
+  } catch (error) { next(error); }
 });
 
-router.get('/my-requests/:userId', async (req, res) => {
+// 3. Gelen Davetleri Listeleme
+router.get('/my-requests/:userId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
     const { userId } = req.params;
+
+    // Güvenlik: Sadece kendi davetlerini veya SISTEM yetkilisi görebilir
+    if (userId !== req.user.id && req.user.roleLevel !== 'SISTEM') {
+      return res.status(403).json({ error: 'Başkasının davetlerini görüntüleyemezsiniz.' });
+    }
+
     const requests = await prisma.connectionRequest.findMany({
       where: { receiverId: userId, status: 'PENDING' },
       include: { sender: { select: { fullName: true, roles: true } } }
     });
     res.json(requests);
-  } catch (error) {
-    res.status(500).json({ error: 'Davetler getirilemedi.' });
-  }
+  } catch (error) { next(error); }
 });
 
-router.post('/accept', async (req, res) => {
+// 4. Daveti Kabul Etme
+router.post('/accept', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), validate(acceptSchema), async (req, res, next) => {
   try {
-    const { requestId, receiverId, targetType, targetId } = req.body;
+    const { requestId, targetType, targetId } = req.body;
+    const receiverId = req.user.id; // Güvenlik: Sadece giriş yapan kişi kendi adına kabul edebilir
+
+    // İstek gerçekten bu kişiye mi ait kontrolü
+    const validRequest = await prisma.connectionRequest.findFirst({
+      where: { id: requestId, receiverId, status: 'PENDING' }
+    });
+
+    if (!validRequest) {
+      return res.status(404).json({ error: 'Geçerli bir davet bulunamadı veya başkasına ait.' });
+    }
+
     await prisma.connectionRequest.update({
       where: { id: requestId },
       data: { status: 'ACCEPTED' }
@@ -73,24 +125,26 @@ router.post('/accept', async (req, res) => {
       });
     }
     res.json({ message: 'Davet kabul edildi ve ağa katıldınız!' });
-  } catch (error) {
-    res.status(500).json({ error: 'Davet kabul edilemedi.' });
-  }
+  } catch (error) { next(error); }
 });
 
-router.get('/my-team/:institutionId', async (req, res) => {
+// 5. Ekibi Görüntüleme
+router.get('/my-team/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
     const { institutionId } = req.params;
     if (!institutionId) return res.json([]);
+
+    // Güvenlik Kalkanı: Başka kurumun personel listesini sızdırmayı engelle
+    if (!await HierarchyService.assertOwnsInstitution(req.user, institutionId)) {
+      return res.status(403).json({ error: 'Bu kurumun personel listesini görme yetkiniz yok.' });
+    }
 
     const team = await prisma.user.findMany({
       where: { institutionId },
       select: { id: true, fullName: true, username: true, roles: true, personelId: true }
     });
     res.json(team);
-  } catch (error) {
-    res.status(500).json({ error: 'Ekip getirilemedi.' });
-  }
+  } catch (error) { next(error); }
 });
 
 module.exports = router;

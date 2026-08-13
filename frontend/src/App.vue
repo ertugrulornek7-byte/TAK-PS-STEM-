@@ -53,6 +53,10 @@ const canSeeYetkiYonetimi = computed(() => ['SISTEM'].includes(userRole.value))
           🏢 Admin Paneli
         </router-link>
 
+<router-link to="/analiz" v-if="yoneticiMi" class="menu-link" active-class="aktif">
+  📈 Kullanım Analizi
+</router-link>
+
         <router-link v-if="canSeeYetkiYonetimi" to="/yetki" class="menu-btn ozel-yetki-btn">
           ⚙️ Yetki ve Yönetim
         </router-link>

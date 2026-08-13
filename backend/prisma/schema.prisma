@@ -52,6 +52,10 @@ enum TaskModuleType {
   KDU
   GENEL
 }
+enum RecurrencePattern {
+  HAFTALIK
+  AYLIK
+}
 
 enum TaskStatus {
   BEKLIYOR
@@ -114,12 +118,16 @@ model User {
   auditLogs         AuditLog[] 
   assignments       TaskAssignment[]
   notifications     Notification[]
-  taskProofs        TaskProof[] // 🔥 HATA ÖNLEYİCİ: Kanıtlar için ilişki eklendi
+  taskProofs        TaskProof[] 
+  
+  // 🔥 HATA ÖNLEYİCİ: TaskTemplate tablosundaki createdBy ilişkisinin karşılığı eklendi!
+  createdTaskTemplates TaskTemplate[]
 
   @@index([institutionId])
 }
 
 model Institution {
+  code          String?  @unique
   id        String   @id @default(uuid())
   name      String
   nevi      String   @default("ORTAOKUL")
@@ -164,6 +172,8 @@ model LevelGroup {
 }
 
 model Student {
+  nationalId    String?  @unique
+  studentType   String?
   id            String   @id @default(uuid())
   institutionId String
   studentCode   String   @unique
@@ -464,7 +474,10 @@ model Task {
   targetUrl       String?  
   month           Int?     
   week            Int?     
-  deadline        DateTime? // SADECE BİR TANE KALDI
+  deadline        DateTime? 
+  templateId      String?
+  template        TaskTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  periodKey       String?       // Örn: "2026-W33" (Aynı hafta iki kere üretilmesin diye)
   
   institutionId   String?  
   senderId        String   
@@ -513,7 +526,7 @@ model TaskProof {
   createdAt   DateTime @default(now())
 
   task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade) // 🔥 HATA ÖNLEYİCİ
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade) 
 }
 
 model AuditLog {
@@ -537,4 +550,29 @@ model Notification {
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TaskTemplate {
+  id              String   @id @default(uuid())
+  title           String
+  description     String?
+  moduleType      TaskModuleType   
+  isActive        Boolean  @default(true)
+
+  recurrence      RecurrencePattern
+  dayOfWeek       Int?     // HAFTALIK için: 0=Pazar...6=Cumartesi
+  dayOfMonth      Int?     // AYLIK için
+  deadlineHour    Int      @default(15)
+  deadlineMinute  Int      @default(0)
+
+  // Kapsam: bu şablon kimin için otomatik görev üretecek?
+  institutionId   String?
+  districtId      String?
+  regionId        String?  // Üçü de boşsa: Tüm sistem
+
+  createdById     String
+  createdBy       User     @relation(fields: [createdById], references: [id])
+  createdAt       DateTime @default(now())
+
+  generatedTasks  Task[]   // Bu şablondan üretilen görevler
 }

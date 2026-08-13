@@ -1,41 +1,94 @@
 const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+const { z } = require('zod');
+
 // 🔥 GÜVENLİK KALKANLARI İÇERİ ALINIYOR
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const validate = require('../middleware/validate');
+const HierarchyService = require('../services/hierarchyService');
 
 // DİKKAT: Bu dosyaya gelen tüm istekler Kimlik Kontrolünden geçmek zorundadır!
 router.use(authenticate);
-const prisma = new PrismaClient();
+
+// ==========================================
+// VERİ DOĞRULAMA ŞABLONLARI (ZOD)
+// ==========================================
+const bookSchema = z.object({
+  body: z.object({
+    title: z.string({ required_error: "Kitap adı zorunludur" }).min(1, "Kitap adı boş olamaz"),
+    totalPages: z.number({ required_error: "Sayfa sayısı zorunludur" }).int().positive("Sayfa sayısı 0'dan büyük olmalıdır"),
+    institutionId: z.string().uuid("Geçersiz Kurum ID").optional().nullable()
+  })
+});
+
+const bookTrackingSchema = z.object({
+  body: z.object({
+    studentId: z.string().uuid("Geçersiz Öğrenci ID"),
+    bookId: z.string().uuid("Geçersiz Kitap ID"),
+    readPages: z.number().int({ required_error: "Okunan sayfa zorunludur" }),
+    targetMonth: z.string().optional().nullable()
+  })
+});
+
+const pauseTrackingSchema = z.object({
+  body: z.object({
+    studentId: z.string().uuid("Geçersiz Öğrenci ID"),
+    targetMonth: z.string().optional().nullable()
+  })
+});
 
 // ==========================================
 // ALT MODÜL: KİTAP VE OKUMA TAKİBİ (SAYFA 3)
 // ==========================================
 
-router.post('/books', async (req, res) => {
+// 1. Yeni Kitap Ekleme
+router.post('/books', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM']), validate(bookSchema), async (req, res, next) => {
   try {
     const { title, totalPages, institutionId } = req.body;
+    const targetInstitution = institutionId || req.user.institutionId;
+
+    if (!await HierarchyService.assertOwnsInstitution(req.user, targetInstitution)) {
+      return res.status(403).json({ error: 'Bu kuruma kitap ekleme yetkiniz yok.' });
+    }
+
     const existingBook = await prisma.book.findFirst({
-      where: { title, totalPages, institutionId }
+      where: { title, totalPages, institutionId: targetInstitution }
     });
+    
     if (existingBook) return res.status(400).json({ error: 'Bu kitap kütüphanenizde zaten mevcut!' });
 
-    const book = await prisma.book.create({ data: { title, totalPages, institutionId } });
+    const book = await prisma.book.create({ 
+      data: { title, totalPages, institutionId: targetInstitution } 
+    });
     res.json(book);
-  } catch (error) { res.status(500).json({ error: 'Kitap eklenemedi.' }); }
+  } catch (error) { next(error); }
 });
 
-router.get('/books/:institutionId', async (req, res) => {
+// 2. Kurumun Kitaplarını Listeleme
+router.get('/books/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
+    if (!await HierarchyService.assertOwnsInstitution(req.user, req.params.institutionId)) {
+      return res.status(403).json({ error: 'Bu kurumun kitaplarını görme yetkiniz yok.' });
+    }
+
     const books = await prisma.book.findMany({ where: { institutionId: req.params.institutionId } });
     res.json(books);
-  } catch (error) { res.status(500).json({ error: 'Kitaplar getirilemedi.' }); }
+  } catch (error) { next(error); }
 });
 
-router.post('/book-tracking', async (req, res) => {
+// 3. Okuma İlerlemesi Kaydetme
+router.post('/book-tracking', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), validate(bookTrackingSchema), async (req, res, next) => {
   try {
     const { studentId, bookId, readPages, targetMonth } = req.body; 
+
+    // Güvenlik Kalkanı: Öğrenci benim öğrencim mi?
+    if (!await HierarchyService.assertOwnsStudent(req.user, studentId)) {
+      return res.status(403).json({ error: 'Bu öğrenciye okuma kaydı ekleme yetkiniz yok.' });
+    }
+
     const eklenecekSayfa = parseInt(readPages);
     let islemTarihi = new Date();
     
@@ -71,22 +124,33 @@ router.post('/book-tracking', async (req, res) => {
       await prisma.readingLog.create({ data: { trackingId: tracking.id, pagesRead: eklenecekSayfa, date: islemTarihi } });
     }
     res.json(tracking);
-  } catch (error) { res.status(500).json({ error: 'Okuma kaydı güncellenemedi.' }); }
+  } catch (error) { next(error); }
 });
 
-router.get('/book-tracking/:institutionId', async (req, res) => {
+// 4. Kurumun Devam Eden Okuma Takibini Getirme
+router.get('/book-tracking/:institutionId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
+    if (!await HierarchyService.assertOwnsInstitution(req.user, req.params.institutionId)) {
+      return res.status(403).json({ error: 'Yetkisiz erişim.' });
+    }
+
     const trackings = await prisma.studentBookTracking.findMany({
       where: { student: { institutionId: req.params.institutionId }, isCompleted: false },
       include: { book: true } 
     });
     res.json(trackings);
-  } catch (error) { res.status(500).json({ error: 'Okuma durumları getirilemedi.' }); }
+  } catch (error) { next(error); }
 });
 
-router.get('/book-tracking/completed/:institutionId/:year/:month', async (req, res) => {
+// 5. Tamamlanan Okumaları (Rozetleri) Getirme
+router.get('/book-tracking/completed/:institutionId/:year/:month', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
     const { institutionId, year, month } = req.params;
+    
+    if (!await HierarchyService.assertOwnsInstitution(req.user, institutionId)) {
+      return res.status(403).json({ error: 'Yetkisiz erişim.' });
+    }
+
     const targetY = parseInt(year), targetM = parseInt(month);
 
     const trackings = await prisma.studentBookTracking.findMany({
@@ -102,12 +166,18 @@ router.get('/book-tracking/completed/:institutionId/:year/:month', async (req, r
       return targetY > islemYili || (targetY === islemYili && targetM >= islemAyi);
     });
     res.json(filteredBooks);
-  } catch (error) { res.status(500).json({ error: 'Rozetler getirilemedi.' }); }
+  } catch (error) { next(error); }
 });
 
-router.post('/book-tracking/pause', async (req, res) => {
+// 6. Okumayı Yarım Bırakma (Dondurma)
+router.post('/book-tracking/pause', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), validate(pauseTrackingSchema), async (req, res, next) => {
   try {
     const { studentId, targetMonth } = req.body; 
+    
+    if (!await HierarchyService.assertOwnsStudent(req.user, studentId)) {
+      return res.status(403).json({ error: 'Yetkisiz işlem.' });
+    }
+
     const tracking = await prisma.studentBookTracking.findFirst({ where: { studentId, isCompleted: false } });
     if (tracking) {
       await prisma.studentBookTracking.update({ where: { id: tracking.id }, data: { isCompleted: true } });
@@ -119,12 +189,18 @@ router.post('/book-tracking/pause', async (req, res) => {
       }
     }
     res.json({ mesaj: 'Kitap yarım bırakıldı.' });
-  } catch (error) { res.status(500).json({ error: 'İşlem başarısız.' }); }
+  } catch (error) { next(error); }
 });
 
-router.get('/book-stats/:institutionId/:year/:month', async (req, res) => {
+// 7. Aylık Kitap İstatistikleri
+router.get('/book-stats/:institutionId/:year/:month', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM', 'PERSONEL']), async (req, res, next) => {
   try {
     const { institutionId, year, month } = req.params;
+    
+    if (!await HierarchyService.assertOwnsInstitution(req.user, institutionId)) {
+      return res.status(403).json({ error: 'Yetkisiz erişim.' });
+    }
+
     const startDate = new Date(parseInt(year), parseInt(month) - 1, 1);
     const endDate = new Date(parseInt(year), parseInt(month), 1); 
 
@@ -137,7 +213,7 @@ router.get('/book-stats/:institutionId/:year/:month', async (req, res) => {
       ...kayit, buAyOkunan: kayit.logs.reduce((top, log) => top + log.pagesRead, 0)
     }));
     res.json(aylikVeriler);
-  } catch (error) { res.status(500).json({ error: 'Aylık istatistikler getirilemedi.' }); }
+  } catch (error) { next(error); }
 });
 
 module.exports = router;

@@ -19,6 +19,7 @@ import Sayfa0Dashboard from '../views/Sayfa0Dashboard.vue'
 import SayfaGorevler from '../views/SayfaGorevler.vue'
 import Sayfa12Yetki from '../views/Sayfa12Yetki.vue'
 import AdminPanel from '../views/AdminPanel.vue'
+import SayfaKullanimAnalizi from '../views/SayfaKullanimAnalizi.vue'
 
 // ==========================================
 // ROTA TANIMLAMALARI VE YETKİ (META) ETİKETLERİ
@@ -39,29 +40,15 @@ const routes = [
   { path: '/denetim', name: 'denetim', component: Sayfa10Denetim, meta: { requiresAuth: true } },
   { path: '/karne/:studentId', name: 'karne', component: Sayfa11Karne, meta: { requiresAuth: true } },
   { path: '/gorevler', name: 'gorevler', component: SayfaGorevler, meta: { requiresAuth: true } },
+  { path: '/analiz', name: 'Analiz', component: SayfaKullanimAnalizi, meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'] } },
   
   // SADECE GİRİŞ YAPMAMIŞ (MİSAFİR) KULLANICILAR İÇİN
   { path: '/login', name: 'login', component: Login, meta: { requiresGuest: true } },
   
   // ÖZEL YETKİ GEREKTİREN SAYFALAR (Rol Bazlı Koruma)
-  { 
-    path: '/admin', 
-    name: 'AdminPanel', 
-    component: AdminPanel, 
-    meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA'] } 
-  },
-  { 
-    path: '/yetki', 
-    name: 'YetkiYonetimi', 
-    component: Sayfa12Yetki, 
-    meta: { requiresAuth: true, roles: ['SISTEM', 'KURUM'] } // 🔥 KURUM rolü eklendi
-  },
-  { 
-    path: '/toplu-ogrenci-ekle', 
-    name: 'TopluOgrenciEkle', 
-    component: () => import('../views/TopluOgrenciEkle.vue'), 
-    meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'] } 
-  },
+  {    path: '/admin',  name: 'AdminPanel',  component: AdminPanel,  meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA'] }  },
+  {   path: '/yetki',  name: 'YetkiYonetimi',  component: Sayfa12Yetki,  meta: { requiresAuth: true, roles: ['SISTEM', 'KURUM'] }  },
+  {  path: '/toplu-ogrenci-ekle',  name: 'TopluOgrenciEkle', component: () => import('../views/TopluOgrenciEkle.vue'),  meta: { requiresAuth: true, roles: ['SISTEM', 'BOLGE', 'MINTIKA', 'KURUM'] } },
 
   // BİLİNMEYEN URL YÖNLENDİRMESİ
   { path: '/:pathMatch(.*)*', redirect: '/' }

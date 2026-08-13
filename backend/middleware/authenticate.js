@@ -12,24 +12,29 @@ const authenticate = async (req, res, next) => {
 
     // 2. Token'ı ayırt edip doğruluyoruz
     const token = authHeader.split(' ')[1];
-    
+
     // Güvenlik: Şifreyi .env dosyasından alıyoruz
     if (!process.env.JWT_SECRET) {
       console.error("🚨 KRİTİK HATA: .env dosyasında JWT_SECRET tanımlı değil! Sunucu başlatılamıyor.");
       process.exit(1); // Uygulamayı güvenli bir şekilde durdurur
     }
-    
+
     const JWT_SECRET = process.env.JWT_SECRET;
-    
-    // 🔥 DÜZELTME BURADA: Artık secretKey yerine tanımladığımız JWT_SECRET kullanılıyor
+
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    // 3. Veritabanından bu kullanıcıyı tapu kayıtlarıyla (Mıntıka, Kurum) birlikte çekiyoruz
+    // 3. Veritabanından bu kullanıcıyı tapu kayıtlarıyla birlikte çekiyoruz
+    // 🔥 EKLENDİ: managedRegion / managedDistrict — bir BOLGE/MINTIKA
+    // kullanıcısının GERÇEKTEN hangi bölgeyi/mıntıkayı yönettiğini bulmak için
+    // gerekli. Bu olmadan toplu personel/talebe yüklemesindeki otomatik
+    // hiyerarşi oluşturma mantığı kimin nereyi yönettiğini bilemiyordu.
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
       include: {
         district: true,
         institution: true,
+        managedRegion: true,
+        managedDistrict: true,
       }
     });
 

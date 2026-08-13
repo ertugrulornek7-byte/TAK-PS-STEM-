@@ -14,6 +14,19 @@ const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
 
+const Sentry = require("@sentry/node");
+const { nodeProfilingIntegration } = require("@sentry/profiling-node");
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  integrations: [
+    nodeProfilingIntegration(),
+  ],
+  // Performans izleme oranı (Geliştirme aşamasında 1.0 yani %100 iyidir)
+  tracesSampleRate: 1.0,
+  profilesSampleRate: 1.0,
+});
+
 // =================================================================
 // 3. GÜVENLİK VE HIZ SINIRLANDIRMA (Middleware'ler en başta çalışır)
 // =================================================================
@@ -52,10 +65,13 @@ app.use(pinoHttp({
   }
 }));
 
+
 // =================================================================
 // 5. ROTALAR (API Uç Noktaları)
 // =================================================================
 // Sistem Durumu
+
+
 app.get('/api/status', (req, res) => {
   res.json({ mesaj: 'Hesap/Hiyerarşi ve Etüt API Servisi Aktif!', durum: 'Başarılı' });
 });
@@ -71,6 +87,11 @@ app.use('/api/inspections', require('./routes/inspections'));
 app.use('/api/curriculum', require('./routes/curriculum'));
 app.use('/api/testbook', require('./routes/testbook'));
 app.use('/api/notifications', require('./routes/notifications'));
+const analyticsRouter = require('./routes/analytics');
+app.use('/api/analytics', analyticsRouter);
+app.get("/debug-sentry", function mainHandler(req, res) {
+  throw new Error("Sentry Test Hatası: Sistem çökme denemesi!");
+});
 
 // Genel Rotalar
 app.use('/api', require('./routes/books'));
@@ -81,6 +102,8 @@ app.use('/api', require('./routes/reports'));
 // =================================================================
 // 6. MERKEZİ HATA YAKALAYICI (Tüm Rotalardan SONRA Eklenmek ZORUNDADIR)
 // =================================================================
+// Yeni Sentry Hata Yakalayıcı (Kendi hata bloğunun hemen üstünde olmalı)
+Sentry.setupExpressErrorHandler(app);
 app.use(errorHandler);
 
 module.exports = app;

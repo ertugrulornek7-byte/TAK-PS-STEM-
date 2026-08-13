@@ -195,4 +195,63 @@ router.put('/approve/:assignmentId', authorize(['SISTEM', 'BOLGE', 'MINTIKA', 'K
   } catch (error) { next(error); }
 });
 
+// ==========================================
+// GÖREV ŞABLONLARI (OTOMATİK GÖREVLER)
+// ==========================================
+
+// Şablon Oluşturma
+router.post('/templates', authorize(['SISTEM', 'BOLGE', 'MINTIKA']), async (req, res, next) => {
+  try {
+    const { title, description, moduleType, recurrence, dayOfWeek, dayOfMonth, deadlineHour, deadlineMinute, targetDistrictId, targetInstitutionId } = req.body;
+
+    let regionId = null;
+    if (req.user.roleLevel === 'BOLGE') regionId = req.user.managedRegion?.id;
+
+    const template = await prisma.taskTemplate.create({
+      data: {
+        title, description, moduleType, recurrence,
+        dayOfWeek: dayOfWeek !== undefined ? parseInt(dayOfWeek) : null,
+        dayOfMonth: dayOfMonth !== undefined ? parseInt(dayOfMonth) : null,
+        deadlineHour: deadlineHour !== undefined ? parseInt(deadlineHour) : 15,
+        deadlineMinute: deadlineMinute !== undefined ? parseInt(deadlineMinute) : 0,
+        institutionId: targetInstitutionId || null,
+        districtId: targetDistrictId || null,
+        regionId: regionId,
+        createdById: req.user.id
+      }
+    });
+    res.json({ message: 'Otomatik görev şablonu başarıyla kuruldu!', template });
+  } catch (error) { next(error); }
+});
+
+// Yöneticinin Kendi Şablonlarını Listelemesi
+router.get('/templates', authorize(['SISTEM', 'BOLGE', 'MINTIKA']), async (req, res, next) => {
+  try {
+    const templates = await prisma.taskTemplate.findMany({
+      where: { createdById: req.user.id, isActive: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(templates);
+  } catch (error) { next(error); }
+});
+
+// Şablonu Pasife Alma (Silme)
+router.delete('/templates/:id', authorize(['SISTEM', 'BOLGE', 'MINTIKA']), async (req, res, next) => {
+  try {
+    // Sadece oluşturan kişi veya SISTEM silebilir
+    const template = await prisma.taskTemplate.findUnique({ where: { id: req.params.id } });
+    if (!template) return res.status(404).json({ error: 'Şablon bulunamadı' });
+
+    if (template.createdById !== req.user.id && req.user.roleLevel !== 'SISTEM') {
+      return res.status(403).json({ error: 'Bu şablonu silme yetkiniz yok' });
+    }
+
+    await prisma.taskTemplate.update({
+      where: { id: req.params.id },
+      data: { isActive: false }
+    });
+    res.json({ message: 'Şablon başarıyla pasife alındı.' });
+  } catch (error) { next(error); }
+});
+
 module.exports = router;
